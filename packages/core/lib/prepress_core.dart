@@ -2,7 +2,7 @@
 ///
 /// Барель пакета. Экспорты модулей добавляются по мере готовности:
 /// geom (01) ✓, parser (02), healer/optimizer (03–04), calculator (05),
-/// manufacturability (06), economics (07), reports (08).
+/// manufacturability (06) ✓, economics (07), reports (08).
 library;
 
 export 'src/model/model.dart';
@@ -24,3 +24,5 @@ export 'src/calculator/material.dart';
 export 'src/calculator/shape.dart';
 export 'src/calculator/consumption.dart';
 export 'src/calculator/layout_optimizer.dart';
+export 'src/manufacturability/geometry_checks.dart';
+export 'src/manufacturability/analyzer.dart';
