@@ -26,3 +26,7 @@ export 'src/calculator/consumption.dart';
 export 'src/calculator/layout_optimizer.dart';
 export 'src/manufacturability/geometry_checks.dart';
 export 'src/manufacturability/analyzer.dart';
+export 'src/economics/assortment.dart';
+export 'src/economics/machine.dart';
+export 'src/economics/teo.dart';
+export 'src/economics/price_catalog.dart';
