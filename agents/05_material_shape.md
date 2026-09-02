@@ -87,7 +87,10 @@ List<MaterialResult> enumerateVariants(LayoutParams p, {int limit = 50}); // л�
 7. Length-режим: L=10000 → revs==32, count==32·45, perLabelArea==2032.0.
 8. Ошибки: этикетка 400 мм в раппорт → error; 400 мм в ширину → error; длина < раппорта → error.
 9. Поворот: rotated=True с rows=5,cols=9 → labelW/labelH меняются местами, perRev==45.
-10. `enumerateVariants`: лучший первый; для узкого полотна (web=180, этикетка 50×30) существует вариант с rotated=true лучше не-rotated (как в python test_optimizer — сверить с файлом).
+10. `enumerateVariants`: лучший первый; варианты rotated:
+    - web=250, этикетка 60×30 → лучший **не-rotated** (9×4=36); этикетка 30×60 → лучший **rotated** (поворот даёт 36 вместо 28) — как в python test_optimizer.py.
+    - web=180, этикетка 60×30 → лучший **rotated** (4×5=20 > 9×2=18) — проверено живым оракулом optimizer.py.
+    - ВНИМАНИЕ (исправление контракта): для web=180 и этикетки 50×30 rotated НЕ лучше (не-rotated 9×3=27 > rotated 5×5=25). Ранее контракт ошибочно утверждал обратное.
 
 ## Shape-тесты (новые)
 - rect 50×30: S=1500, efficiency=1.0.
