@@ -1,0 +1,23 @@
+name: prepress_planner
+description: "Препресс-Планер — планирование расходных материалов и ТЭО для флексопечати этикеток."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.13.2
+
+# Только Flutter SDK + локальный пакет домена: pub.dev недоступен в среде
+# разработки, поэтому внешних зависимостей нет.
+dependencies:
+  flutter:
+    sdk: flutter
+  prepress_core:
+    path: ../packages/core
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true

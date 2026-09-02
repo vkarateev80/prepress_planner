@@ -1,0 +1,16 @@
+# Конфигурация анализатора «Препресс-Планер» (app).
+# flutter_lints недоступен (pub.dev закрыт) — используем базовые правила.
+analyzer:
+  exclude:
+    - build/**
+    - ios/**
+    - windows/**
+    - macos/**
+    - linux/**
+
+linter:
+  rules:
+    - avoid_print
+    - prefer_single_quotes
+    - prefer_const_constructors
+    - use_key_in_widget_constructors
