@@ -9,3 +9,6 @@ export 'src/model/model.dart';
 export 'src/geom/polygon2.dart';
 export 'src/geom/geom_ops.dart';
 export 'src/geom/geom_boolean.dart';
+export 'src/parser/parser_exception.dart';
+export 'src/parser/base_parser.dart';
+export 'src/parser/dxf_parser.dart';
