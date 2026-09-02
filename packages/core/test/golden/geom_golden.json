@@ -1,0 +1,90 @@
+{
+ "union_rects": {
+  "area": 150.0,
+  "minx": 0.0,
+  "miny": 0.0,
+  "maxx": 15.0,
+  "maxy": 10.0,
+  "rings": 1
+ },
+ "buffer_sq_p1": {
+  "area": 143.1365484905459,
+  "minx": -1.0,
+  "miny": -1.0,
+  "maxx": 11.0,
+  "maxy": 11.0,
+  "rings": 1
+ },
+ "buffer_sq_m1": {
+  "area": 64.0,
+  "minx": 1.0,
+  "miny": 1.0,
+  "maxx": 9.0,
+  "maxy": 9.0,
+  "rings": 1
+ },
+ "donut": {
+  "area": 364.0,
+  "minx": 0.0,
+  "miny": 0.0,
+  "maxx": 20.0,
+  "maxy": 20.0,
+  "rings": 2
+ },
+ "donut_buf_p05": {
+  "area": 415.7841371226365,
+  "minx": -0.5,
+  "miny": -0.5,
+  "maxx": 20.5,
+  "maxy": 20.5,
+  "rings": 2
+ },
+ "donut_buf_m05": {
+  "area": 312.2158628773635,
+  "minx": 0.5,
+  "miny": 0.5,
+  "maxx": 19.5,
+  "maxy": 19.5,
+  "rings": 2
+ },
+ "union_disjoint": {
+  "area": 50.0,
+  "minx": 0.0,
+  "miny": 0.0,
+  "maxx": 15.0,
+  "maxy": 15.0,
+  "rings": 2
+ },
+ "circle": {
+  "area": 314.1031950890507,
+  "minx": -10.0,
+  "miny": -10.0,
+  "maxx": 10.0,
+  "maxy": 10.0,
+  "rings": 1
+ },
+ "circle_buf_p1": {
+  "area": 380.07327648565087,
+  "minx": -10.999866137909562,
+  "miny": -10.999866137909562,
+  "maxx": 10.999866137909562,
+  "maxy": 10.999866137909562,
+  "rings": 1
+ },
+ "circle_donut": {
+  "area": 263.8466838748031,
+  "minx": -10.0,
+  "miny": -10.0,
+  "maxx": 10.0,
+  "maxy": 10.0,
+  "rings": 2
+ },
+ "circle_donut_buf_p05": {
+  "area": 307.8268082120268,
+  "minx": -10.49993306895478,
+  "miny": -10.49993306895478,
+  "maxx": 10.49993306895478,
+  "maxy": 10.49993306895478,
+  "rings": 2
+ }
+}
