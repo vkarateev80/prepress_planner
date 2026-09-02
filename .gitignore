@@ -1,0 +1,36 @@
+# ── Легаси-приложения (эталон порта; не входят в новый репозиторий) ──
+/cam_pipeline/
+/cam_material/
+/spec.md
+/SPECIFICATION.md
+
+# ── Локальные инструменты (Dart/Flutter SDK и пр.) ──
+/.tools/
+
+# ── Dart / Flutter ──
+.dart_tool/
+.packages
+**/.dart_tool/
+**/build/
+.flutter-plugins
+.flutter-plugins-dependencies
+**/Pods/
+**/ephemeral/
+*.iml
+
+# ── Python-сервисы ──
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# ── ОС / IDE ──
+Thumbs.db
+.DS_Store
+.idea/
+.vscode/
+
+# ── DSH / служебное ──
+.dsh/
