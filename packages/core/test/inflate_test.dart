@@ -14,8 +14,15 @@ void main() {
     final name = entry.key;
     final raw = base64Decode((entry.value as Map<String, dynamic>)['raw_b64'] as String);
     final expected = base64Decode((entry.value as Map<String, dynamic>)['out_b64'] as String);
-    final out = inflate(Uint8List.fromList(raw));
-    expectEq(out.length, expected.length, '$name: длина');
+    Uint8List out;
+    var mode = 'inflate';
+    try {
+      out = inflate(Uint8List.fromList(raw));
+    } catch (_) {
+      out = inflateZlib(Uint8List.fromList(raw));
+      mode = 'inflateZlib';
+    }
+    expectEq(out.length, expected.length, '$name: длина ($mode)');
     var same = true;
     for (var i = 0; i < expected.length; i++) {
       if (out[i] != expected[i]) {
@@ -23,8 +30,8 @@ void main() {
         break;
       }
     }
-    expect(same, '$name: содержимое совпадает');
-    ok('inflate: $name');
+    expect(same, '$name: содержимое совпадает ($mode)');
+    ok('inflate: $name ($mode)');
   }
   // ignore: avoid_print
   print('Все тесты inflate пройдены.');

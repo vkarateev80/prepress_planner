@@ -145,7 +145,30 @@ class _Huffman {
   }
 }
 
-/// Inflate: [data] — полный deflate-поток (без zlib-заголовка и без хвоста).
+/// Inflate c zlib-обёрткой (заголовок CMF/FLG, опциональный FDICT).
+/// Некоторые PDF-производители оборачивают FlateDecode в zlib вопреки спецe.
+Uint8List inflateZlib(Uint8List data) {
+  if (data.length < 6) {
+    throw const InflateException('zlib: слишком короткий поток');
+  }
+  final cmf = data[0];
+  final flg = data[1];
+  if ((cmf & 0x0F) != 8) {
+    throw const InflateException('zlib: неверный CMF');
+  }
+  if ((cmf * 256 + flg) % 31 != 0) {
+    throw const InflateException('zlib: битый заголовок');
+  }
+  var off = 2;
+  if ((flg & 0x20) != 0) {
+    off += 4; // FDICT
+    if (off + 4 > data.length) {
+      throw const InflateException('zlib: битый FDICT');
+    }
+  }
+  return inflate(Uint8List.sublistView(data, off));
+}
+
 Uint8List inflate(Uint8List data) {
   final br = _BitReader(data);
   final outBytes = <int>[];
@@ -250,30 +273,34 @@ Uint8List inflate(Uint8List data) {
         distTree = _Huffman.fromLengths(distLens);
       }
       // Символы.
-      while (true) {
-        final sym = litTree.decode2(br);
-        if (sym < 256) {
-          emitByte(sym);
-        } else if (sym == 256) {
-          break;
-        } else {
-          final li = sym - 257;
-          if (li >= lenBase.length) throw const InflateException('битая длина');
-          var length = lenBase[li];
-          final extra = lenExtra[li];
-          if (extra > 0) length += br.readBits(extra);
-          final dsym = distTree.decode2(br);
-          if (dsym >= distBase.length) throw const InflateException('битая дистанция');
-          var dist = distBase[dsym];
-          final dextra = distExtra[dsym];
-          if (dextra > 0) dist += br.readBits(dextra);
-          final start = outBytes.length - dist;
-          if (start < 0) throw const InflateException('дистанция больше вывода');
-          // Перекрывающиеся копии читаем из растущего вывода (как LZ77).
-          for (var k = 0; k < length; k++) {
-            emitByte(outBytes[start + k]);
+      try {
+        while (true) {
+          final sym = litTree.decode2(br);
+          if (sym < 256) {
+            emitByte(sym);
+          } else if (sym == 256) {
+            break;
+          } else {
+            final li = sym - 257;
+            if (li >= lenBase.length) throw const InflateException('битая длина');
+            var length = lenBase[li];
+            final extra = lenExtra[li];
+            if (extra > 0) length += br.readBits(extra);
+            final dsym = distTree.decode2(br);
+            if (dsym >= distBase.length) throw const InflateException('битая дистанция');
+            var dist = distBase[dsym];
+            final dextra = distExtra[dsym];
+            if (dextra > 0) dist += br.readBits(dextra);
+            final start = outBytes.length - dist;
+            if (start < 0) throw const InflateException('дистанция больше вывода');
+            // Перекрывающиеся копии читаем из растущего вывода (как LZ77).
+            for (var k = 0; k < length; k++) {
+              emitByte(outBytes[start + k]);
+            }
           }
         }
+      } catch (e) {
+        rethrow;
       }
     } else {
       throw const InflateException('зарезервированный тип блока');
