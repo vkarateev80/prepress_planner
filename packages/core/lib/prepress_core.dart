@@ -16,3 +16,5 @@ export 'src/parser/svg_parser.dart';
 export 'src/parser/pdf_parser.dart';
 export 'src/parser/ai_pdf_parser.dart';
 export 'src/parser/parse_file.dart';
+export 'src/healer/morphology.dart';
+export 'src/optimizer/topology.dart';

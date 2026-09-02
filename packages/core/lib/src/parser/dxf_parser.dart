@@ -410,7 +410,7 @@ class DxfParser extends BaseParser {
     for (var i = 1; i < n; i++) {
       ctrlLen += math.sqrt(math.pow(xs[i] - xs[i - 1], 2) + math.pow(ys[i] - ys[i - 1], 2));
     }
-    final steps = math.min(20000, math.max(64, (ctrlLen / 0.05).ceil() * 2));
+    final steps = math.min(20000, math.max(64, (ctrlLen / 0.05).ceil()));
     final out = <Vec2>[];
     for (var s = 0; s <= steps; s++) {
       final u = u0 + (u1 - u0) * s / steps;

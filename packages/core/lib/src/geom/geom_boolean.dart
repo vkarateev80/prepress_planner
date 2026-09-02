@@ -157,15 +157,32 @@ List<_Arc> _nodeSegments(List<List<Vec2>> segs) {
   }
 
   // Разбиваем каждый отрезок всеми точками пересечения с другими.
+  // Предвычисляем bbox сегментов для дешёвой отсечки далёких пар.
+  final nSegs = segs.length;
+  final bxs = List<double>.filled(nSegs, 0);
+  final bys = List<double>.filled(nSegs, 0);
+  final bxe = List<double>.filled(nSegs, 0);
+  final bye = List<double>.filled(nSegs, 0);
+  for (var s = 0; s < nSegs; s++) {
+    final p = segs[s][0], q = segs[s][1];
+    bxs[s] = p.x < q.x ? p.x : q.x;
+    bys[s] = p.y < q.y ? p.y : q.y;
+    bxe[s] = p.x < q.x ? q.x : p.x;
+    bye[s] = p.y < q.y ? q.y : p.y;
+  }
   final result = <List<Vec2>>[];
-  for (var i = 0; i < segs.length; i++) {
+  for (var i = 0; i < nSegs; i++) {
     final a1 = segs[i][0], a2 = segs[i][1];
     final cuts = <double>[
       0.0,
       1.0
     ];
-    for (var j = 0; j < segs.length; j++) {
+    for (var j = 0; j < nSegs; j++) {
       if (i == j) continue;
+      if (bxe[i] < bxs[j] - 1e-9 || bxe[j] < bxs[i] - 1e-9 ||
+          bye[i] < bys[j] - 1e-9 || bye[j] < bys[i] - 1e-9) {
+        continue; // bbox не пересекаются — пересечение невозможно
+      }
       final b1 = segs[j][0], b2 = segs[j][1];
       final inter = segmentIntersections(a1, a2, b1, b2);
       for (final x in inter) {
@@ -249,6 +266,74 @@ List<Polygon2> polygonize(List<List<Vec2>> lines) {
   if (arcs.isEmpty) return const [];
   final faces = _traceFaces(arcs);
   return faces.map((f) => Polygon2([f])).toList();
+}
+
+/// Атомарные (нодированные) сегменты ломаных: разбиение всех отрезков
+/// точками пересечений, дедупликация по геометрии (u—v == v—u).
+/// Используется для «хвостов» лечения (разность линий и границ).
+List<List<Vec2>> nodeLineSegments(List<List<Vec2>> lines) {
+  final segs = _segmentsOf(lines);
+  if (segs.isEmpty) return const [];
+  // Нарезка как в _nodeSegments (с bbox-отсечкой).
+  final nSegs = segs.length;
+  final bxs = List<double>.filled(nSegs, 0);
+  final bys = List<double>.filled(nSegs, 0);
+  final bxe = List<double>.filled(nSegs, 0);
+  final bye = List<double>.filled(nSegs, 0);
+  for (var s = 0; s < nSegs; s++) {
+    final p = segs[s][0], q = segs[s][1];
+    bxs[s] = p.x < q.x ? p.x : q.x;
+    bys[s] = p.y < q.y ? p.y : q.y;
+    bxe[s] = p.x < q.x ? q.x : p.x;
+    bye[s] = p.y < q.y ? q.y : p.y;
+  }
+  final result = <List<Vec2>>[];
+  for (var i = 0; i < nSegs; i++) {
+    final a1 = segs[i][0], a2 = segs[i][1];
+    final cuts = <double>[
+      0.0,
+      1.0
+    ];
+    for (var j = 0; j < nSegs; j++) {
+      if (i == j) continue;
+      if (bxe[i] < bxs[j] - 1e-9 || bxe[j] < bxs[i] - 1e-9 ||
+          bye[i] < bys[j] - 1e-9 || bye[j] < bys[i] - 1e-9) {
+        continue;
+      }
+      final b1 = segs[j][0], b2 = segs[j][1];
+      final inter = segmentIntersections(a1, a2, b1, b2);
+      for (final x in inter) {
+        final d1 = (x - a1).length, d2 = (x - a2).length;
+        final total = d1 + d2;
+        if (total < 1e-9) continue;
+        final t = d1 / total;
+        if (t > 1e-9 && t < 1 - 1e-9) cuts.add(t);
+      }
+    }
+    cuts.sort();
+    for (var k = 0; k + 1 < cuts.length; k++) {
+      final t1 = cuts[k], t2 = cuts[k + 1];
+      if (t2 - t1 < 1e-9) continue;
+      final u = a1 + (a2 - a1) * t1;
+      final v = a1 + (a2 - a1) * t2;
+      if ((u - v).length < 1e-7) continue;
+      result.add([u, v]);
+    }
+  }
+  // Дедупликация неориентированных сегментов.
+  final seen = <String>{};
+  final out = <List<Vec2>>[];
+  for (final e in result) {
+    final k1 = '${(e[0].x * 1e6).round()},${(e[0].y * 1e6).round()}|'
+        '${(e[1].x * 1e6).round()},${(e[1].y * 1e6).round()}';
+    final k2 = '${(e[1].x * 1e6).round()},${(e[1].y * 1e6).round()}|'
+        '${(e[0].x * 1e6).round()},${(e[0].y * 1e6).round()}';
+    if (seen.contains(k1) || seen.contains(k2)) continue;
+    seen.add(k1);
+    seen.add(k2);
+    out.add(e);
+  }
+  return out;
 }
 
 // ============================================================
@@ -470,8 +555,12 @@ List<Vec2>? _offsetRing(List<Vec2> ring, double d, String join, double mitreLimi
     final expand = isHole ? -d : d; // расширение области кольца
     final wantArc = join == 'round' && expand > 0 && convex && (b - a).length > 1e-9;
     if (wantArc) {
+      // Дуговая вставка только если угол достаточно велик — иначе просто
+      // точка (правило GEOS: quadSegs на 90°; микро-дуги на почти-плоских
+      // углах плотных контуров дают зигзаг-мусор при weld ±0.005).
+      final arc = _roundJoin(pts[prev], pts[j], pts[nxt], a, b, d);
       out.add(a);
-      out.addAll(_roundJoin(pts[prev], pts[j], pts[nxt], a, b, d));
+      out.addAll(arc);
       out.add(b);
       continue;
     }
