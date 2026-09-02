@@ -39,19 +39,17 @@ void main() {
     expectNear(y1, 165.85, '$name maxy', eps: 2.0);
   }
 
-  // petlya_open_artifacts.pdf (Adobe Illustrator-экспорт): поток со zlib-обёрткой
-  // и мультиблочным хвостом — локальная распаковка не поддерживается; по
-  // контракту 02 ожидается понятная ошибка (серверная конвертация).
-  var threw = false;
-  var msg = '';
-  try {
-    parser.parse(fx('petlya_open_artifacts.pdf'));
-  } catch (e) {
-    threw = true;
-    msg = e.toString();
-  }
-  expect(threw, 'open_artifacts.pdf: ожидаемый отказ локального парсинга');
-  expect(msg.contains('контура') || msg.contains('PDF'), 'русское сообщение об ошибке');
+  // petlya_open_artifacts.pdf (Adobe Illustrator-экспорт): zlib-обёртка с
+  // мультиблочным потоком. Оракул Python: 5 путей, все НЕзамкнуты
+  // (1 большой контур петли из кубиков + 4 обрывка-артефакта по 2 точки).
+  final oa = parser.parse(fx('petlya_open_artifacts.pdf'));
+  expectEq(oa.length, 5, 'open_artifacts.pdf: 5 контуров (оракул)');
+  expect(oa.every((p) => !p.isClosed), 'open_artifacts.pdf: все открыты');
+  final (ox0, oy0, ox1, oy1) = boundsOf(oa);
+  expectNear(ox0, 98.26, 'open_artifacts minx', eps: 1.0);
+  expectNear(oy0, 119.65, 'open_artifacts miny', eps: 1.0);
+  expectNear(ox1, 123.62, 'open_artifacts maxx', eps: 1.0);
+  expectNear(oy1, 165.80, 'open_artifacts maxy', eps: 1.0);
 
   // Слой — PDF_VECTOR (проверяем на успешно распарсенных petlya).
   final plCheck = parser.parse(fx('petlya.pdf'));

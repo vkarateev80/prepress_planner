@@ -272,17 +272,43 @@ class PdfParser extends BaseParser {
     final dict = _dictOf(obj.dict);
     final filter = dict == null ? null : _nameOf(dict, 'Filter');
     if (filter == 'FlateDecode' || filter == 'Fl') {
+      final s = obj.stream!;
+      // Некоторые производители оборачивают FlateDecode в zlib (заголовок
+      // CMF/FLG) вопреки спецe. Если заголовок валиден — распаковываем как
+      // zlib ПЕРВЫМ: raw-inflate по zlib-потоку может «успешно» выдать мусор
+      // (stored-block из случайных байт заголовка), и fallback не сработает.
+      if (_isZlibHeader(s)) {
+        try {
+          return inflateZlib(s);
+        } catch (_) {
+          try {
+            return inflate(s);
+          } catch (_) {
+            return null;
+          }
+        }
+      }
       try {
-        return inflate(obj.stream!);
+        return inflate(s);
       } catch (_) {
         try {
-          return inflateZlib(obj.stream!); // некоторые производители шлют zlib
+          return inflateZlib(s);
         } catch (_) {
           return null;
         }
       }
     }
     return obj.stream;
+  }
+
+  /// Валиден ли заголовок zlib (CMF/FLG): CM=8 (deflate), контрольная сумма
+  /// (CMF*256+FLG) % 31 == 0.
+  bool _isZlibHeader(Uint8List d) {
+    if (d.length < 2) return false;
+    final cmf = d[0];
+    final flg = d[1];
+    if ((cmf & 0x0F) != 8) return false;
+    return (cmf * 256 + flg) % 31 == 0;
   }
 
   Uint8List? _pageContent(_Page page, Map<int, _PdfObj> objs) {
