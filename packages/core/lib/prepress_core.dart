@@ -18,6 +18,8 @@ export 'src/parser/ai_pdf_parser.dart';
 export 'src/parser/parse_file.dart';
 export 'src/healer/morphology.dart';
 export 'src/optimizer/topology.dart';
+export 'src/optimizer/pattern_recognition.dart';
+export 'src/optimizer/array_generator.dart';
 export 'src/calculator/material.dart';
 export 'src/calculator/shape.dart';
 export 'src/calculator/consumption.dart';

@@ -56,7 +56,8 @@ List<CamPath> generateArrayGrid(List<CamPath> master,
 6. `masterArea` — площадь внешнего контура мастера (для расходов по чистой площади).
 
 ## Тесты
-- `fixtures/quadroring.dxf`/`.svg`/`.pdf`: распознаётся массив: `isArray=true`, rows≥2, cols≥2, count≥4; bbox этикетки ~одинаковый во всех форматах (допуск 0.5 мм); gapX/gapY ≥ 0.
+- `fixtures/quadroring.dxf`/`.svg`: **это НЕ массив этикеток, а логотип**: прямоугольник 21.5×33 + два ОДИНАКОВЫХ эллипса 42.4×43.7 (дубль — артефакт экспорта). Эталон Python pattern_recognition.py на геометрии Dart-парсеров: `is_array=True, count=2, rows=1, cols=1, step 0/0` (главная группа из 2 одинаковых эллипсов — вырожденный «массив» 1×1, смещения ~0). Тест: dxf/svg → isArray=true, count=2, rows=cols=1, размер этикетки 42.397×43.715 согласован dxf↔svg (допуск 0.5 мм); gapX/gapY ≥ 0.
+- `quadroring.pdf` и `petlya.*` — одиночный контур (петля) → isArray=false.
 - Синтетика: мастер-квадрат 10×10, сетка 3×2, шаг 20/15 → recognize возвращает rows=2, cols=3, stepX=20, stepY=15, count=6.
 - `generateArrayGrid(master, cols:2, rows:3, stepX:20, stepY:15)` → count=6; смещения копий = (0,0),(20,0),(0,−15),(20,−15),(0,−30),(20,−30); bounds копий согласуются со смещениями (допуск 1e-6).
 - `autoRowsForRapport(304.8, 30, 3) == 9`.
