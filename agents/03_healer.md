@@ -19,7 +19,9 @@ packages/core/test/healer_test.dart
 
 ```dart
 class MorphologicalHealer {
-  MorphologicalHealer({double tolerance = 2.0, double minLoopArea = 1.0});
+  MorphologicalHealer({double tolerance = 0.01, double minLoopArea = 0.0});
+  // ЗАМЕТКА: дефолты класса в Python — 0.01/0.0; analyzer.healGeometry
+  // вызывает с параметрами ManufacturingParams (tolerance=2.0, minLoopArea=1.0).
   List<CamPath> heal(List<CamPath> paths);
 }
 
@@ -29,14 +31,16 @@ class TopologicalOptimizer {
 }
 ```
 
-## Семантика (порт 1:1 — сверяться с morphology.py)
-1. Жёсткий предфильтр пыли: отбросить объекты с площадью/длиной < minLoopArea ДО математики.
-2. Снаппинг концов: пары концов ближе tolerance (по умолчанию 2.0 мм) усредняются в одну точку (сшивание разрывов). Python-реализацию портировать дословно (допуск из ManufacturingParams).
-3. Слияние: `lineMerge` → разрезание пересечений (`unaryUnion` линий/нодинг) → `polygonize`.
-4. Сборка: объединение полигонов (`unaryUnionPolygons`), морфологическое замыкание `buffer(0.005).buffer(−0.005)` (сварка микрощелей).
-5. Извлечение внешних контуров (`layerName: 'HEALED_POLY'`) и отверстий (`'HEALED_HOLE'`); «хвосты» (линии, не вошедшие в полигоны, длиннее порога) → `'HEALED_TAIL'`.
-6. `TopologicalOptimizer.optimize`: упрощение Дугласа–Пекера с preserve_topology (0.001) для удаления коллинеарных узлов.
-7. Слои-маркеры: как в Python (см. morphology.py: HEALED_POLY/HEALED_HOLE/HEALED_TAIL).
+## Семантика (порт 1:1 — ПОСЛЕДОВАТЕЛЬНОСТЬ ИЗ morphology.py)
+Порядок операций ТОЧНО как в `MorphologicalHealer.heal()`:
+1. **Жёсткий предфильтр пыли** (до математики): для каждого пути с ≥2 точек: если `minLoopArea > 0`: замкнутый (is_closed или совпали концы) → построить полигон, площадь < minLoopArea → выбросить; если полигон не строится → выбросить; незамкнутый → длина < minLoopArea → выбросить.
+2. **Снаппинг концов** (`_snap_endpoints`): собрать концы всех линий; для каждой пары концов с расстоянием 0 < d ≤ tolerance — заменить оба на среднюю точку. Затем пересобрать линии: начало/конец из снапнутых точек; если расстояние между концами < 1e-4 — замкнуть (конец = начало).
+3. **Слияние**: `lineMerge` снапнутых линий.
+4. **Нодинг + полигонизация**: `unaryUnion`(линий) → `polygonize`; пост-фильтр: оставить полигоны с площадью ≥ minLoopArea.
+5. **Сборка**: `unaryUnionPolygons`(полигонов) → **сварка** `buffer(+0.005, join:'round')` затем `buffer(−0.005, join:'round')` (в Python `join_style=1` = ROUND).
+6. **Извлечение**: внешний контур каждого полигона → `CamPath(isClosed:true, layerName:'HEALED_POLY')`; каждое отверстие (interior) → отдельный `CamPath(isClosed:true, layerName:'HEALED_HOLE')`. Координаты округлить до 4 знаков. MultiPolygon — рекурсивно.
+7. **Хвосты**: если полигоны есть: `remaining = noded_lines − union(всех exterior)` (разность линий); иначе remaining = noded_lines. `lineMerge`(remaining) → каждая линия длиной ≥ minLoopArea → `CamPath(isClosed:false, layerName:'HEALED_TAIL')`.
+8. `TopologicalOptimizer.optimize`: для каждого пути ≥2 точек: замкнутый с ≥3 → simplify как кольцо (preserve_topology, допуск 0.001), иначе как ломаная; округлить до 4 знаков; сохранить layerName/isClosed.
 
 ## Тесты
 - petlya_open_artifacts.dxf (fixtures): после heal — все контуры замкнуты (кроме HEALED_TAIL), нет пересечений; количество HEALED_POLY ≥ 1.

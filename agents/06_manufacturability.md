@@ -31,17 +31,17 @@ List<CamPath> removeDustPaths(List<CamPath> paths, double minLoopArea);
 List<CamPath> applyIssueFix(List<CamPath> paths, Issue issue, ManufacturingParams p);
 ```
 
-## Проверки (порт 1:1 из geometry_checks.py)
-| kind | что ищет | severity | fixable |
+## Проверки (порт 1:1 из geometry_checks.py — severity ТОЧНО как в Python)
+| kind | что ищет | severity (Python) | fixable |
 |---|---|---|---|
-| `open` | незамкнутые контуры | error | да (лечение) |
-| `intersection` | самопересечения/пересечения контуров | error | да (лечение) |
-| `duplicate` | наложенные сегменты (перекрытие > 0.01 мм) | error | да (лечение) |
+| `open` | незамкнутые контуры | **error** | да (лечение) |
+| `intersection` | самопересечение контура ИЛИ пересечение двух контуров (длина пересечения ≤ 0.01) | **warning** | да (лечение) |
+| `duplicate` | наложенные сегменты (длина пересечения > 0.01 мм), внутри контура или между контурами | **warning** | да (лечение) |
 | `dust` | замкнутый контур площадью < minLoopArea или линия короче | warning | да (удаление) |
-| `sharp_corner` | острые углы (разворот лезвия > 90°; скругление радиусом minRadius не помещается → error, помещается → suggestion) | error/suggestion | нет |
-| `small_gap` | зазоры между контурами < minGap | warning | нет |
+| `sharp_corner` | разворот лезвия > 90° (turn_deg); r_max = min(длин сторон)·tan(wedge/2) < minRadius → error, иначе suggestion | error/suggestion | нет |
+| `small_gap` | расстояние между контурами 0 < d < minGap (лимит пар 300) | warning | нет |
 
-Порядок сборки и тексты сообщений — как в python (русские). Маркеры: `Issue.points` — точки для отрисовки (концы разрывов, точки пересечений, центры пыли и т.д.).
+Порядок сборки, тексты сообщений («Пыль/мусор: контур №N…», «Разомкнутый контур №N…» и т.д.) и точки-маркеры — как в python (русские; см. geometry_checks.py). Формулы sharp_corner: `turn_deg = |π − theta|·180/π`, где theta — внутренний угол из dot/cross с учётом выпуклости (is_convex = cross>0 == area>0); `wedge = min(theta, 2π−theta)`; `r_max = min(l_in,l_out)·tan(wedge/2)`.
 
 ## Авто-исправления (порт analyzer.py)
 - `applyIssueFix`: dust → removeDustPaths; open/intersection/duplicate → healGeometry; иначе вернуть paths без изменений.

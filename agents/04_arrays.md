@@ -36,11 +36,15 @@ class PatternRecognizer {
 }
 
 // Генератор (порт multiply_paths + open_array_generator)
+// Смещения сетки: for c in 0..cols-1, r in 0..rows-1: (c·stepX, −r·stepY)
+// (ось Y вверх → ряды уходят ВНИЗ; копия при (0,0) — сам мастер, итого cols×rows путей).
 List<CamPath> multiplyPaths(List<CamPath> master, List<Vec2> offsets, {String layerName = 'ARRAY'});
-int autoRowsForRapport(double rapport, double labelH, double minGap);   // rows_max = rapport // (labelH + minGap)
+// клонирует КАЖДЫЙ путь master для КАЖДОГО offset: точка + offset, округление до 4 знаков, isClosed сохраняется
+int autoRowsForRapport(double rapport, double labelH, double minGap);   // rows_max = int(rapport // (labelH + minGap))
 List<CamPath> generateArrayGrid(List<CamPath> master,
     {required int cols, required int rows, required double stepX, required double stepY,
      String layerName = 'ARRAY'});
+// эквивалент UI: stepX = labelW+gapX, stepY = labelH+gapY (или rapport/rows для авто-Y)
 ```
 
 ## Семантика (сверяться с Python)
@@ -54,7 +58,7 @@ List<CamPath> generateArrayGrid(List<CamPath> master,
 ## Тесты
 - `fixtures/quadroring.dxf`/`.svg`/`.pdf`: распознаётся массив: `isArray=true`, rows≥2, cols≥2, count≥4; bbox этикетки ~одинаковый во всех форматах (допуск 0.5 мм); gapX/gapY ≥ 0.
 - Синтетика: мастер-квадрат 10×10, сетка 3×2, шаг 20/15 → recognize возвращает rows=2, cols=3, stepX=20, stepY=15, count=6.
-- `generateArrayGrid` по мастеру → count = rows·cols; каждый путь смещён на (c·stepX, r·stepY).
+- `generateArrayGrid(master, cols:2, rows:3, stepX:20, stepY:15)` → count=6; смещения копий = (0,0),(20,0),(0,−15),(20,−15),(0,−30),(20,−30); bounds копий согласуются со смещениями (допуск 1e-6).
 - `autoRowsForRapport(304.8, 30, 3) == 9`.
 - `multiplyPaths(master, offsets)` — геометрия копий идентична мастеру (bounds сдвинуты точно на offset).
 - Одиночный контур (petlya.dxf) → isArray=false.
