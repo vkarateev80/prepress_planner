@@ -13,7 +13,7 @@
 | 4 | ТЭО: сортамент, машиночасы, скорость, переналадка, рабочее время, оснастка; C_per_1k, экономия, break-even, загрузка смены, чувствительность | ✅ | `economics_test.dart` 6 OK (reference_teo, compare_variants, break_even, catalog_json, rounding). E2E: «ТЭО: costPer1000=704.88, лучший вариант #1 (704.88 ₽/1000)»; `assortment.dart`/`machine.dart`/`teo.dart` в core |
 | 5 | PDF ТЭО и XLSX формируются; DXF открываются | ✅ | `reports_test.dart` 5 OK (pdf_structure, xlsx_structure, dxf_write_roundtrip, writers_real_data) — структура проверяется PyMuPDF/zipfile |
 | 6 | В `packages/core` нет модулей маски/G-кода | ✅ | grep mask|gcode|уф|уп → 0 (только «управляющие символы» в XML-комментарии) |
-| 7 | Триал 15 дней + гейтинг Free/Pro | ✅ | Сервер: `services/license` pytest 10 OK (activate/validate/trial 15 d). Клиент: widget/unit `license_test.dart` 5 OK (feature gate, кэш+грэйс 30 дн., trial timer, offline-stub триал 15 дн., paywall). iOS IAP (StoreKit) — заглушка `onPurchase`, реальный IAP вне объёма MVP |
+| 7 | Триал 15 дней + гейтинг Free/Pro | ✅ | Сервер: `services/license` pytest 10 OK (activate/validate/trial 15 d). Клиент: `license_test.dart` 5 OK + `license_ui_test.dart` 5 OK — bootstrap триала при первом запуске, чип статуса в шапке, paywall, квота Free (1 проект), гейтинг Pro-вкладок/«Перебора вариантов». iOS IAP (StoreKit) — заглушка `purchase()`, реальный IAP вне объёма MVP |
 | 8 | `dart test` (домен), `pytest` (сервисы), `flutter test` зелёные; CI | ✅ | Домен: «ALL PASS (16 files)». pytest: «17 passed» (7 конвертер + 10 лицензии). Flutter: «All tests passed!» (10) + `flutter analyze` «No issues found!». CI: `.github/workflows/ci.yml`, `release.yml` |
 
 ## Сводка команд и фактические выводы
@@ -41,7 +41,7 @@ dart tool/e2e.dart   (из packages/core)   → E2E OK
 ### Flutter
 ```
 cd app && flutter analyze   → No issues found!
-cd app && flutter test      → All tests passed! (10: 5 widget + 5 license)
+cd app && flutter test      → All tests passed! (15: 5 widget + 5 license + 5 license_ui)
 ```
 
 ### Сервисы
