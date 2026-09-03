@@ -25,6 +25,7 @@ __pycache__/
 venv/
 *.egg-info/
 .pytest_cache/
+pytest-cache-files-*/
 
 # ── ОС / IDE ──
 Thumbs.db
