@@ -6,6 +6,7 @@ import 'dart:isolate';
 import 'package:flutter/material.dart';
 import 'package:prepress_core/prepress_core.dart';
 
+import '../../license/entitlement_store.dart';
 import '../projects/project.dart';
 import '../widgets/params_form.dart';
 import '../widgets/variants_table.dart';
@@ -13,8 +14,14 @@ import '../widgets/variants_table.dart';
 class LayoutScreen extends StatefulWidget {
   final Project? project;
   final ValueChanged<Project> onChange;
+  final FeatureGate? gate;
+  final VoidCallback? onNeedPro;
   const LayoutScreen(
-      {super.key, required this.project, required this.onChange});
+      {super.key,
+      required this.project,
+      required this.onChange,
+      this.gate,
+      this.onNeedPro});
 
   @override
   State<LayoutScreen> createState() => _LayoutScreenState();
@@ -129,6 +136,11 @@ class _LayoutScreenState extends State<LayoutScreen> {
   }
 
   Future<void> _enumerate(Project project, LayoutParams params) async {
+    final gate = widget.gate;
+    if (gate != null && !gate.hasProAccess) {
+      widget.onNeedPro?.call();
+      return;
+    }
     setState(() => _busy = true);
     try {
       final variants = await Isolate.run(() => enumerateVariants(params));

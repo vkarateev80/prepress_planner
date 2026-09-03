@@ -3,6 +3,8 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../../license/license_controller.dart';
+import '../../license/paywall_screen.dart';
 import '../projects/project.dart';
 import 'geometry_screen.dart';
 import 'layout_screen.dart';
@@ -12,7 +14,8 @@ import 'teo_screen.dart';
 
 class HomeShell extends StatefulWidget {
   final ProjectStore store;
-  const HomeShell({super.key, required this.store});
+  final LicenseController? license;
+  const HomeShell({super.key, required this.store, this.license});
 
   @override
   State<HomeShell> createState() => _HomeShellState();
@@ -21,6 +24,22 @@ class HomeShell extends StatefulWidget {
 class _HomeShellState extends State<HomeShell> {
   Project? project;
   int _index = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.license?.addListener(_onLicense);
+  }
+
+  @override
+  void dispose() {
+    widget.license?.removeListener(_onLicense);
+    super.dispose();
+  }
+
+  void _onLicense() {
+    if (mounted) setState(() {});
+  }
 
   void _setProject(Project p) {
     setState(() {
@@ -34,6 +53,34 @@ class _HomeShellState extends State<HomeShell> {
     widget.store.save(p); // fire-and-forget
   }
 
+  /// Pro-вкладки (всё, кроме «Проекты» и «Раскрой»).
+  static bool _isProTab(int i) => i == 1 || i == 3 || i == 4;
+
+  bool _tabAllowed(int i) {
+    final lic = widget.license;
+    if (lic == null) return true;
+    if (_isProTab(i) && !lic.gate.hasProAccess) return false;
+    return true;
+  }
+
+  void _selectTab(int i) {
+    if (!_tabAllowed(i)) {
+      final lic = widget.license;
+      if (lic != null) {
+        showProSheet(context, lic,
+            feature: 'Эта функция доступна в Pro');
+      }
+      return;
+    }
+    setState(() => _index = i);
+  }
+
+  void _requirePro(String feature) {
+    final lic = widget.license;
+    if (lic == null || lic.gate.hasProAccess) return;
+    showProSheet(context, lic, feature: feature);
+  }
+
   @override
   Widget build(BuildContext context) {
     final pages = <Widget>[
@@ -41,9 +88,18 @@ class _HomeShellState extends State<HomeShell> {
         store: widget.store,
         onOpen: _setProject,
         current: project,
+        gate: widget.license?.gate,
+        onNeedPro: () => _requirePro(
+            'Второй проект доступен в Pro (Free — 1 проект)'),
       ),
       GeometryScreen(project: project, onChange: _update),
-      LayoutScreen(project: project, onChange: _update),
+      LayoutScreen(
+        project: project,
+        onChange: _update,
+        gate: widget.license?.gate,
+        onNeedPro: () =>
+            _requirePro('Перебор вариантов раскроя доступен в Pro'),
+      ),
       TeoScreen(project: project, onChange: _update),
       ReportsScreen(project: project, store: widget.store),
     ];
@@ -52,6 +108,14 @@ class _HomeShellState extends State<HomeShell> {
         title: Text(project == null
             ? 'Препресс-Планер'
             : '${project!.name} — Препресс-Планер'),
+        actions: [
+          if (widget.license != null) ...[
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: _StatusChip(license: widget.license!),
+            ),
+          ],
+        ],
       ),
       body: LayoutBuilder(builder: (context, constraints) {
         final wide = constraints.maxWidth > 700;
@@ -60,7 +124,7 @@ class _HomeShellState extends State<HomeShell> {
             children: [
               NavigationRail(
                 selectedIndex: _index,
-                onDestinationSelected: (i) => setState(() => _index = i),
+                onDestinationSelected: _selectTab,
                 labelType: NavigationRailLabelType.all,
                 destinations: const [
                   NavigationRailDestination(
@@ -91,7 +155,7 @@ class _HomeShellState extends State<HomeShell> {
             Expanded(child: pages[_index]),
             NavigationBar(
               selectedIndex: _index,
-              onDestinationSelected: (i) => setState(() => _index = i),
+              onDestinationSelected: _selectTab,
               destinations: const [
                 NavigationDestination(
                     icon: Icon(Icons.folder_outlined), label: 'Проекты'),
@@ -108,6 +172,32 @@ class _HomeShellState extends State<HomeShell> {
           ],
         );
       }),
+    );
+  }
+}
+
+/// Чип статуса подписки в шапке: открывает paywall.
+class _StatusChip extends StatelessWidget {
+  final LicenseController license;
+  const _StatusChip({required this.license});
+
+  @override
+  Widget build(BuildContext context) {
+    final isPro = license.entitlement.pro;
+    final icon = isPro
+        ? Icons.workspace_premium
+        : (license.gate.isTrialActive
+            ? Icons.timer_outlined
+            : Icons.lock_outline);
+    return TextButton.icon(
+      onPressed: () => openPaywall(context, license),
+      icon: Icon(icon, size: 18),
+      label: Text(license.statusLabel),
+      style: TextButton.styleFrom(
+        foregroundColor: isPro
+            ? Theme.of(context).colorScheme.primary
+            : null,
+      ),
     );
   }
 }

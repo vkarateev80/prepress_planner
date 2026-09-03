@@ -44,11 +44,21 @@ class FeatureGate {
   const FeatureGate(this.entitlement);
 
   bool get isPro => entitlement.pro;
+
+  /// Триал ещё не истёк (Pro не куплен).
+  bool get isTrialActive =>
+      !entitlement.pro &&
+      entitlement.until != null &&
+      entitlement.until!.isAfter(DateTime.now());
+
+  /// Полный доступ: Pro или активный триал.
+  bool get hasProAccess => isPro || isTrialActive;
+
   bool get isTrial => entitlement.trialDaysLeft > 0 && !entitlement.pro;
 
-  /// Free: 1 проект, прямоугольный расчёт. Pro: всё.
+  /// Free: 1 проект, прямоугольный расчёт. Pro/триал: всё.
   bool allows(String feature) {
-    if (isPro) return true;
+    if (hasProAccess) return true;
     switch (feature) {
       case 'project.create':
       case 'layout.rect':

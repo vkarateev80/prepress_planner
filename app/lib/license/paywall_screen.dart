@@ -4,6 +4,70 @@ library;
 import 'package:flutter/material.dart';
 
 import 'entitlement_store.dart';
+import 'license_controller.dart';
+
+/// Открывает полноэкранный paywall; покупка идёт через контроллер.
+Future<void> openPaywall(
+    BuildContext context, LicenseController license) {
+  return Navigator.of(context).push(MaterialPageRoute<void>(
+    builder: (_) => PaywallScreen(
+      timer: license.timer,
+      onPurchase: (p) async {
+        await license.purchase(p);
+        if (context.mounted) Navigator.of(context).pop();
+      },
+    ),
+  ));
+}
+
+/// Нижняя шторка «Доступно в Pro» с кнопкой оформления.
+Future<void> showProSheet(
+  BuildContext context,
+  LicenseController license, {
+  String? feature,
+}) {
+  return showModalBottomSheet<void>(
+    context: context,
+    builder: (sheetContext) => SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.workspace_premium,
+                    color: Theme.of(sheetContext).colorScheme.primary),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    feature == null ? 'Доступно в Pro' : feature,
+                    style: Theme.of(sheetContext).textTheme.titleMedium,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            const Text('Оформите подписку, чтобы открыть эту возможность.'),
+            const SizedBox(height: 16),
+            FilledButton(
+              onPressed: () {
+                Navigator.of(sheetContext).pop();
+                openPaywall(context, license);
+              },
+              child: const Text('Оформить Pro'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(sheetContext).pop(),
+              child: const Text('Позже'),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
 
 class PaywallScreen extends StatelessWidget {
   final TrialTimer timer;

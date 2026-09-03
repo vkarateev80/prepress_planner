@@ -3,17 +3,22 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../../license/entitlement_store.dart';
 import '../projects/project.dart';
 
 class ProjectsScreen extends StatefulWidget {
   final ProjectStore store;
   final ValueChanged<Project> onOpen;
   final Project? current;
+  final FeatureGate? gate;
+  final VoidCallback? onNeedPro;
   const ProjectsScreen(
       {super.key,
       required this.store,
       required this.onOpen,
-      this.current});
+      this.current,
+      this.gate,
+      this.onNeedPro});
 
   @override
   State<ProjectsScreen> createState() => _ProjectsScreenState();
@@ -37,6 +42,12 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
   Future<void> _create() async {
     final name = _nameCtrl.text.trim();
     if (name.isEmpty) return;
+    // Free-квота: 1 проект.
+    final gate = widget.gate;
+    if (gate != null && !gate.hasProAccess && _names.isNotEmpty) {
+      widget.onNeedPro?.call();
+      return;
+    }
     await widget.store.save(Project(name: name));
     final p = await widget.store.load(name);
     if (p != null) widget.onOpen(p);
