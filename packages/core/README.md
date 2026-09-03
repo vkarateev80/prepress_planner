@@ -16,14 +16,16 @@
 `dart test` недоступен (нет пакета test). Каждый `test/*_test.dart` — исполняемый скрипт с `void main()` и хелперами из `tool/test_utils.dart`. Запуск из `packages/core`:
 
 ```powershell
-& 'C:\Users\user\Desktop\MyApp\vibe cam\.tools\dart-sdk\bin\dart.exe' test\<file>_test.dart
+# dart из PATH или <корень>\.tools\dart-sdk\bin\dart.exe (см. scripts/run_domain_tests.ps1)
+& dart test\<file>_test.dart
 # код выхода 0 = успех; в выводе «OK: <имя>» на каждую проверку
 ```
 
 Все тесты (цикл):
 ```powershell
+# удобнее: powershell -File ..\..\scripts\run_domain_tests.ps1  (из корня репо)
 Get-ChildItem test -Filter *_test.dart | ForEach-Object {
-  & 'C:\Users\user\Desktop\MyApp\vibe cam\.tools\dart-sdk\bin\dart.exe' $_.FullName
+  & dart $_.FullName
   if ($LASTEXITCODE -ne 0) { exit 1 }
 }
 ```

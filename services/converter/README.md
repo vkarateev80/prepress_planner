@@ -1,4 +1,4 @@
-﻿# Сервис конвертации (converter)
+# Сервис конвертации (converter)
 
 FastAPI: AI/CDR/EPS → SVG/PDF. Переиспользует локальные движки
 (Inkscape, Ghostscript) — эталон конвейеров `cam_pipeline`.
@@ -24,6 +24,16 @@ curl http://localhost:8120/convert/<job_id>
 pip install -r requirements.txt
 uvicorn converter_app.main:app --port 8120
 ```
+
+Движки указываются env-переменными (иначе — дефолтные пути к `cam_pipeline`):
+
+```bash
+PP_INKSCAPE=/opt/inkscape/bin/inkscape      # Inkscape: .ai/.cdr → svg/pdf
+PP_GHOSTSCRIPT=/usr/bin/gs                  # Ghostscript: .eps → pdf
+```
+
+Без движков сервис работает (PDF-совместимый .ai проходит без них), а тесты
+реальных прогонов Inkscape/Ghostscript помечены `skipif` по доступности.
 
 ## Тесты
 
