@@ -1,34 +1,45 @@
-# Агент 12 — Подписка в приложении: SDK лицензий + paywall (app/lib/license/, app/lib/remote/)
+# Агент 12 — Аккаунт и подписка в приложении (app/lib/license/)
 
 ## Роль (Ф4)
-Клиентская часть монетизации в Flutter-приложении: триал-таймер, активация/валидация, офлайн-кэш, гейтинг фич, paywall-экран, iOS IAP (StoreKit) с серверной проверкой ресивера.
+Клиентская часть монетизации в Flutter-приложении: вход/регистрация по
+email+пароль, подписка Pro с микросервиса оплаты, офлайн-фолбэк, гейтинг
+фич, paywall-экран.
 
 ## Создаваемые файлы
 ```
-app/lib/license/license_client.dart   // HTTP к services/license (или заглушка на время разработки)
-app/lib/license/entitlement.dart      // Entitlement { pro, until, trialDaysLeft, source }
-app/lib/license/entitlement_store.dart// кэш на диске (JSON) + офлайн-грэйс 30 дней
-app/lib/license/feature_gate.dart     // class FeatureGate { bool get isPro; }
-app/lib/license/trial_timer.dart      // «Пробный период: осталось N дней»
-app/lib/license/paywall_screen.dart   // экран подписки (месяц/год), кнопки, статус
-app/lib/license/machine_id.dart       // стабильный machine-id (устройство)
-app/lib/license/iap_ios.dart          // StoreKit через in_app_purchase (iOS)
-app/test/license_test.dart
+app/lib/license/account_client.dart       // AuthApi/PaymentsApi (dart:io), AccountGateway
+app/lib/license/account_screen.dart       // экран входа/регистрации/профиля + AccountButton
+app/lib/license/license_client.dart       // офлайн-заглушка (триал 15 дней) — фолбэк
+app/lib/license/license_controller.dart   // сессия, синхронизация подписки, покупка, выход
+app/lib/license/entitlement_store.dart    // кэш entitlement (JSON) + грэйс
+app/lib/license/paywall_screen.dart       // paywall: покупка через контроллер
+app/test/license_account_test.dart
 ```
 
 ## Логика
-- machine-id: стабильный идентификатор устройства (UUID, сохраняемый в secure storage/файл; десктоп — в профиле пользователя).
-- Активация: на первом запуске `activate(machine_id)` → сервер выдаёт триал 15 дней; ответ и offline_token кэшируются.
-- Валидация: при старте и раз в сутки `validate`; при отсутствии сети — использовать кэш (грэйс 30 дней с даты выдачи токена).
-- `FeatureGate`: Free → 1 проект, прямоугольный расчёт; Pro → всё. UI блокирует Pro-действия с подсказкой «Доступно в Pro».
-- Paywall: показывает триал/подписку; iOS — IAP (месяц/год, introductory offer 15 дней), после покупки — отправка ресивера на сервер (`POST /license/apple-receipt`).
-- Экран статуса: «Пробный период: осталось N дней» / «Pro до …» / «Free».
+- AccountGateway (интерфейс) + AccountGatewayHttp: register/login/logout →
+  auth; subscription/plans/checkout/confirm → payments. В тестах — фейк.
+- LicenseController:
+  - `init()`: восстановление сессии (state/session.json) → кэш → сервер;
+    без всего — офлайн-триал 15 дней (фолбэк, без сети).
+  - `login/register`: gateway → сессия сохраняется → подписка с сервера.
+  - `purchase(month|year)`: заказ в payments + тестовое подтверждение →
+    обновление подписки. 'restore' — перечитать с сервера/кэш.
+  - `logout()`: токен отзывается, сессия удаляется, серверный Pro НЕ
+    переносится в офлайн (подписка привязана к аккаунту).
+  - Без gateway (офлайн/тесты) — прежняя локальная заглушка.
+- Кэш `source: server` доверяется только при живой сессии.
+- Paywall: если не вошёл — открывает экран аккаунта и повторяет покупку.
+- Шапка: AccountButton («Войти»/email) + чип статуса подписки.
+- Адреса серверов: env `PP_AUTH_URL`, `PP_PAYMENTS_URL`; по умолчанию VPS
+  (порты 8121/8122). Ошибки — русские.
 
 ## Тесты (widget/unit, без сети)
-1. feature_gate с entitlement pro=true/false.
-2. Кэш: сохранение/чтение entitlement; истечение грэйса.
-3. trial_timer: вычисление остатка дней.
-4. paywall: рендер и обработка кнопок (заглушка покупки).
+1. license_account_test: регистрация → Free; покупка → Pro; сессия
+   восстанавливается; неверный пароль → ошибка; выход снимает Pro;
+   сервер недоступен → ошибка входа; офлайн-путь без gateway не изменился.
+2. license_ui_test / license_test: прежние (триал, кэш, гейтинг, paywall).
 
 ## Критерии приёмки
-1. Юнит/widget-тесты зелёные. 2. Код не падает без сети (кэш). 3. Русские тексты.
+1. Юнит/widget-тесты зелёные. 2. Без сети код не падает (офлайн-фолбэк).
+3. Русские тексты. 4. flutter analyze — чисто.

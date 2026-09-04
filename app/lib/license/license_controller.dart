@@ -1,38 +1,74 @@
-/// Контроллер лицензии в приложении: bootstrap триала, кэш, покупка.
+/// Контроллер лицензии/аккаунта в приложении.
+///
+/// Режимы:
+/// - без [AccountGateway] — офлайн: локальный триал 15 дней, покупка-заглушка
+///   (текущее поведение, используется в тестах и без сети);
+/// - с [AccountGateway] — аккаунт email+пароль: вход/регистрация/выход,
+///   подписка приходит с микросервиса оплаты (payments), покупка — заказ +
+///   тестовое подтверждение. Если сервер недоступен, работает офлайн-фолбэк
+///   (кэш или локальный триал).
 library;
 
 import 'package:flutter/foundation.dart';
 
+import 'account_client.dart';
 import 'entitlement_store.dart';
 import 'license_client.dart';
 
-/// Связывает [EntitlementStore] (кэш), [LicenseClient] (сервер/заглушка)
-/// и [MachineId]; уведомляет UI об изменениях энтайтлмента.
+/// Связывает хранилище (кэш), шлюз аккаунта (auth+payments, опционально),
+/// [MachineId] и уведомляет UI об изменениях.
 class LicenseController extends ChangeNotifier {
   final EntitlementStore store;
   final LicenseClient client;
-  final String stateDir; // каталог для machine_id.txt
+  final String stateDir; // каталог для machine_id.txt и session.json
+  final AccountGateway? gateway;
+  final SessionStore sessionStore;
 
   Entitlement _entitlement = Entitlement.free;
+  AccountSession? _session;
   bool _ready = false;
+  bool _busy = false;
+  String? _accountError;
 
   LicenseController({
     required this.store,
     required this.client,
     required this.stateDir,
-  });
+    this.gateway,
+  }) : sessionStore = SessionStore(stateDir);
 
   Entitlement get entitlement => _entitlement;
   bool get ready => _ready;
+  bool get busy => _busy;
+  String? get accountError => _accountError;
   FeatureGate get gate => FeatureGate(_entitlement);
   TrialTimer get timer => TrialTimer(_entitlement);
 
-  /// Первый запуск: если кэша нет — активируем триал 15 дней и сохраняем.
+  /// Вошёл ли пользователь (есть сохранённая сессия).
+  bool get loggedIn => _session != null;
+  String? get accountEmail => _session?.email;
+
+  /// Первый запуск: кэш → восстановление сессии → сервер; без кэша и сессии
+  /// активируем офлайн-триал 15 дней.
   Future<void> init() async {
+    final session = await sessionStore.load();
+    _session = session;
     final cached = await store.load();
-    if (cached != null) {
-      _entitlement = cached;
-    } else {
+    // Серверный кэш значим только при живой сессии (иначе это чужой Pro).
+    final usableCache = (cached != null &&
+            (cached.source != 'server' || session != null))
+        ? cached
+        : null;
+    if (usableCache != null) {
+      _entitlement = usableCache;
+    }
+    if (session != null && gateway != null) {
+      // Есть сессия — пытаемся получить актуальную подписку с сервера.
+      await _refreshFromServer(quiet: true);
+    } else if (_entitlement.source == 'local' &&
+        _entitlement.pro == false &&
+        _entitlement.until == null) {
+      // Нет кэша вовсе — локальный триал (или свободный доступ без сети).
       final machineId = await MachineId.load(stateDir);
       final e = await client.activate(machineId);
       _entitlement = e;
@@ -42,29 +78,154 @@ class LicenseController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Покупка (заглушка до IAP): месяц/год → Pro; restore — перечитать кэш.
-  Future<void> purchase(String period) async {
+  Future<void> _refreshFromServer({bool quiet = false}) async {
+    final g = gateway;
+    final s = _session;
+    if (g == null || s == null) return;
+    try {
+      final sub = await g.subscription(s.token);
+      if (sub.pro && sub.until != null) {
+        _entitlement = Entitlement(
+          pro: true,
+          until: sub.until,
+          trialDaysLeft: 0,
+          source: 'server',
+        );
+        await store.save(_entitlement);
+      } else if (!quiet) {
+        // Свободный аккаунт: сервер подписки не имеет — показываем Free,
+        // но офлайн-кэш (триал) не затираем.
+        if (_entitlement.source == 'server' ||
+            (!_entitlement.pro && _entitlement.until == null)) {
+          _entitlement = Entitlement.free;
+        }
+      }
+      _accountError = null;
+    } on Exception catch (e) {
+      // Сервер недоступен — офлайн-фолбэк (кэш/триал) остаётся.
+      if (!quiet) _accountError = e.toString();
+    }
+    notifyListeners();
+  }
+
+  /// Вход в аккаунт.
+  Future<String?> login(String email, String password) async {
+    final g = gateway;
+    if (g == null) return 'Вход недоступен: сервер не настроен';
+    _busy = true;
+    _accountError = null;
+    notifyListeners();
+    try {
+      final session = await g.login(email.trim(), password);
+      _session = session;
+      await sessionStore.save(session);
+      await _refreshFromServer();
+      return null;
+    } on Exception catch (e) {
+      _accountError = e.toString();
+      return e.toString();
+    } finally {
+      _busy = false;
+      notifyListeners();
+    }
+  }
+
+  /// Регистрация нового аккаунта.
+  Future<String?> register(String email, String password) async {
+    final g = gateway;
+    if (g == null) return 'Регистрация недоступна: сервер не настроен';
+    _busy = true;
+    _accountError = null;
+    notifyListeners();
+    try {
+      final session = await g.register(email.trim(), password);
+      _session = session;
+      await sessionStore.save(session);
+      await _refreshFromServer();
+      return null;
+    } on Exception catch (e) {
+      _accountError = e.toString();
+      return e.toString();
+    } finally {
+      _busy = false;
+      notifyListeners();
+    }
+  }
+
+  /// Выход: токен на сервере отзывается, локальная сессия удаляется.
+  /// Серверный Pro не переносится в офлайн после выхода (подписка привязана
+  /// к аккаунту): возвращаемся к локальному состоянию (триал-кэш/Free).
+  Future<void> logout() async {
+    final s = _session;
+    final g = gateway;
+    _session = null;
+    await sessionStore.clear();
+    if (s != null && g != null) {
+      try {
+        await g.logout(s.token);
+      } catch (_) {}
+    }
+    final cached = await store.load();
+    final offline = (cached != null && cached.source == 'local')
+        ? cached
+        : Entitlement.free;
+    _entitlement = offline;
+    notifyListeners();
+  }
+
+  /// Покупка Pro.
+  ///
+  /// С gateway: заказ в payments + тестовое подтверждение, затем обновление
+  /// подписки с сервера. Без gateway (офлайн/тесты) — локальная заглушка.
+  /// 'restore' — перечитать подписку с сервера (или кэш офлайн).
+  Future<String?> purchase(String period) async {
     if (period == 'restore') {
+      if (gateway != null && _session != null) {
+        await _refreshFromServer();
+        return null;
+      }
       final cached = await store.load();
       if (cached != null) {
         _entitlement = cached;
         notifyListeners();
       }
-      return;
+      return null;
     }
+    final g = gateway;
+    final s = _session;
+    if (g != null && s != null) {
+      _busy = true;
+      notifyListeners();
+      try {
+        // Сервер сам продлил подписку — забираем актуальный статус.
+        await g.purchase(s.token, period);
+        await _refreshFromServer();
+        return null;
+      } on Exception catch (e) {
+        _accountError = e.toString();
+        return e.toString();
+      } finally {
+        _busy = false;
+        notifyListeners();
+      }
+    }
+    if (g != null) {
+      return 'Сначала войдите в аккаунт';
+    }
+    // Офлайн-заглушка (тесты/без сети): месяц/год → Pro.
     final now = DateTime.now();
     final until = period == 'year'
         ? now.add(const Duration(days: 365))
         : now.add(const Duration(days: 30));
-    final e = Entitlement(
+    _entitlement = Entitlement(
       pro: true,
       until: until,
       trialDaysLeft: 0,
       source: 'local',
     );
-    _entitlement = e;
-    await store.save(e);
+    await store.save(_entitlement);
     notifyListeners();
+    return null;
   }
 
   /// Пометка «Pro-экран недоступен» → короткий статус для шапки.

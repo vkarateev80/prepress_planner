@@ -1,20 +1,37 @@
-/// Paywall-экран и статус подписки (заглушка покупки).
+/// Paywall-экран и статус подписки (покупка через микросервис оплаты).
 library;
 
 import 'package:flutter/material.dart';
 
+import 'account_screen.dart';
 import 'entitlement_store.dart';
 import 'license_controller.dart';
 
 /// Открывает полноэкранный paywall; покупка идёт через контроллер.
+/// Если аккаунт не нужен/не вошёл — сначала открывается вход, затем покупка
+/// повторяется автоматически.
 Future<void> openPaywall(
     BuildContext context, LicenseController license) {
   return Navigator.of(context).push(MaterialPageRoute<void>(
     builder: (_) => PaywallScreen(
       timer: license.timer,
       onPurchase: (p) async {
-        await license.purchase(p);
-        if (context.mounted) Navigator.of(context).pop();
+        var err = await license.purchase(p);
+        if (err == 'Сначала войдите в аккаунт') {
+          await Navigator.of(context).push(MaterialPageRoute<void>(
+            builder: (_) => AccountScreen(license: license),
+          ));
+          if (!license.loggedIn) return; // пользователь закрыл вход
+          err = await license.purchase(p);
+        }
+        if (!context.mounted) return;
+        if (err != null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(err)),
+          );
+          return;
+        }
+        Navigator.of(context).pop();
       },
     ),
   ));

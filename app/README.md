@@ -15,9 +15,12 @@
   внешних пакетов): импорт закрытых форматов AI/CDR/EPS → SVG. Адрес по умолчанию
   `http://193.233.193.12:8120` (VPS-сервер), переопределяется env `PP_CONVERTER_URL`
   или кнопкой в UI экрана «Геометрия».
-- `lib/license/` — клиент лицензий: `LicenseClient` (HTTP/офлайн-заглушка), `EntitlementStore`
-  (кэш + грэйс 30 дн.), `FeatureGate` (Free/Pro, триал), `TrialTimer`, `LicenseController`
-  (ChangeNotifier), `PaywallScreen` + хелперы `openPaywall`/`showProSheet`.
+- `lib/license/` — аккаунт и подписка: `AccountGateway` (HTTP к микросервисам
+  auth/payments, VPS), `LicenseController` (сессия, синхронизация подписки,
+  покупка, офлайн-фолбэк), `EntitlementStore` (кэш + грэйс 30 дн.), `FeatureGate`
+  (Free/Pro, триал), `TrialTimer`, `AccountScreen` (вход/регистрация),
+  `PaywallScreen` + хелперы `openPaywall`/`showProSheet`. Адреса: env
+  `PP_AUTH_URL`/`PP_PAYMENTS_URL` (по умолчанию VPS 8121/8122).
 
 ## Импорт файлов
 

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'license/account_client.dart';
 import 'license/entitlement_store.dart';
 import 'license/license_client.dart';
 import 'license/license_controller.dart';
@@ -32,8 +33,9 @@ class _PrepressPlannerAppState extends State<PrepressPlannerApp> {
     _license = LicenseController(
       store: EntitlementStore('state'),
       client: LicenseClient(),
+      gateway: AccountGatewayHttp(), // auth + payments (VPS); офлайн-фолбэк внутри
       stateDir: 'state',
-    )..init(); // bootstrap триала 15 дней при первом запуске
+    )..init(); // bootstrap: восстановление сессии/триала
   }
 
   @override

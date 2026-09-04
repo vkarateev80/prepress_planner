@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../../license/license_controller.dart';
 import '../../license/paywall_screen.dart';
+import '../../license/account_screen.dart';
 import '../logs/app_log.dart';
 import '../projects/project.dart';
 import '../widgets/log_window.dart';
@@ -129,6 +130,7 @@ class _HomeShellState extends State<HomeShell> {
             },
           ),
           if (widget.license != null) ...[
+            AccountButton(license: widget.license!),
             Padding(
               padding: const EdgeInsets.only(right: 8),
               child: _StatusChip(license: widget.license!),
