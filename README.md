@@ -4,7 +4,9 @@
 
 - **Домен** (чистый Dart, без Flutter): `packages/core` — геометрия, парсеры (DXF/SVG/PDF/AI), лечение, массивы, shape-aware расход, технологичность, экономика/ТЭО, отчёты (PDF/XLSX/DXF).
 - **Приложение** (Flutter UI): `app` — проекты, геометрия, раскрой, ТЭО, отчёты.
-- **Сервисы** (FastAPI): `services/converter` (AI/CDR/EPS → SVG/PDF), `services/license` (триал 15 дней, подписка Pro).
+- **Сервисы** (FastAPI): `services/converter` (AI/CDR/EPS → SVG/PDF),
+  `services/auth` (аккаунты email+пароль, HMAC-токены),
+  `services/payments` (подписка Pro: заказ/оплата-заглушка/вебхук).
 - **Легаси-эталон** (не в git): `cam_pipeline`, `cam_material` — исходный Python-код, из которого портируется домен.
 - **Контракты субагентов**: `agents/00..14`.
 - **Спека/план**: `docs/superpowers/specs/`, `docs/superpowers/plans/`.
@@ -38,7 +40,8 @@ Python venv: `cam_pipeline\venv\Scripts\python.exe` (fastapi/uvicorn/pytest/sqla
 
 ```powershell
 & 'cam_pipeline\venv\Scripts\python.exe' -m pytest services/converter/tests -q
-& 'cam_pipeline\venv\Scripts\python.exe' -m pytest services/license/tests -q
+& 'cam_pipeline\venv\Scripts\python.exe' -m pytest services/auth/tests -q
+& 'cam_pipeline\venv\Scripts\python.exe' -m pytest services/payments/tests -q
 ```
 
 Python (для генерации золотых эталонов и верификации PDF): `cam_pipeline\venv\Scripts\python.exe` (содержит shapely, ezdxf, PyMuPDF).
@@ -49,7 +52,8 @@ Python (для генерации золотых эталонов и вериф�
 - Фаза 1 (домен: геометрия, парсеры, лечение, массивы, расход+shape, технологичность) — выполнена, тесты зелёные.
 - Фаза 2 (экономика/ТЭО, отчёты PDF/XLSX/DXF) — выполнена, тесты зелёные.
 - Фаза 3 (Flutter UI) — выполнена, `flutter analyze` 0 ошибок, тесты зелёные.
-- Фаза 4 (сервисы: конвертер, лицензии, подписка) — выполнена, pytest 17 зелёные, триал 15 дней.
+- Фаза 4 (сервисы: конвертер, авторизация, оплата) — выполнена; converter/auth/payments
+  развёрнуты на VPS (8120/8121/8122), pytest зелёные; оплата — заглушка до подключения провайдера.
 - Фаза 5 (CI, сборка, верификация) — выполнена; CI в `.github/workflows`, приёмка в `docs/VERIFICATION.md`.
 
 ## Сквозной сценарий

@@ -1,0 +1,74 @@
+# Все сервисы «Препресс-Планер» для VPS: converter (8120), auth (8121),
+# payments (8122) — одна сеть, общий секрет PP_AUTH_SECRET для auth/payments.
+#
+# Быстрый старт:
+#   cd services
+#   cp .env.example .env        # задайте PP_AUTH_SECRET
+#   docker compose up -d --build
+#
+# Сервис конвертера дополнительно описан в services/converter/README.md
+# (swarm-масштабирование — там же).
+services:
+  converter:
+    build: ./converter
+    image: pp-converter:latest
+    ports:
+      - "8120:8120"
+    environment:
+      PP_DATA_DIR: /srv/converter/data
+      PP_JOB_STORE: file
+      PP_JOB_TTL_HOURS: "24"
+    volumes:
+      - converter-data:/srv/converter/data
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8120/healthz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  auth:
+    build: ./auth
+    image: pp-auth:latest
+    ports:
+      - "8121:8121"
+    environment:
+      PP_DATA_DIR: /srv/auth/data
+      PP_AUTH_SECRET: ${PP_AUTH_SECRET:?задайте PP_AUTH_SECRET в .env}
+      PP_TOKEN_TTL: "720"
+    volumes:
+      - auth-data:/srv/auth/data
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8121/healthz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  payments:
+    build: ./payments
+    image: pp-payments:latest
+    ports:
+      - "8122:8122"
+    environment:
+      PP_DATA_DIR: /srv/payments/data
+      PP_AUTH_SECRET: ${PP_AUTH_SECRET:?задайте PP_AUTH_SECRET в .env}
+    volumes:
+      - payments-data:/srv/payments/data
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8122/healthz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+volumes:
+  converter-data:
+  auth-data:
+  payments-data:

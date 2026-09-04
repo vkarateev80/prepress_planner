@@ -1,41 +1,61 @@
-# Агент 11 — Лицензионный сервер (services/license/)
+# Агент 11 — Микросервисы авторизации (services/auth) и оплаты (services/payments)
 
 ## Роль (Ф4)
-FastAPI: **триал 15 дней** с первой активации, подписки Pro (месяц/год), активация лицензионных ключей по machine-id, офлайн-токены, webhooks Stripe/Apple.
+Аккаунты email+пароль и подписка Pro (месяц/год) как два микросервиса
+(вместо единого license-сервера на machine-id). Платёжный провайдер — пока
+заглушка (checkout → confirm/webhook), контракт заложен под подключение
+ЮKassa/Robokassa/Stripe позже.
 
 ## Создаваемые файлы
 ```
-services/license/app/main.py          # FastAPI: /license/*, /webhooks/*
-services/license/app/models.py        # SQLAlchemy/SQLite: Device, License, Subscription, Trial
-services/license/app/crypto.py        # подпись офлайн-токенов (HMAC/Ed25519), machine-id hash
-services/license/app/stripe_webhook.py
-services/license/app/apple_webhook.py # App Store Server API: валидация ресивера
-services/license/app/admin.py         # простой admin (выпуск ключей, просмотр)
-services/license/requirements.txt
-services/license/Dockerfile
-services/license/tests/test_license.py
-services/license/.env.example         # STRIPE_SECRET, APPLE_* , SIGNING_KEY
+services/auth/auth_app/main.py       # FastAPI: /auth/register|login|logout|me, /healthz
+services/auth/auth_app/__init__.py
+services/auth/tests/test_auth.py
+services/auth/requirements.txt        # fastapi, uvicorn, pydantic, pytest, httpx
+services/auth/Dockerfile              # python:3.12-slim, порт 8121
+services/auth/README.md
+
+services/payments/payments_app/main.py  # /payments/plans|checkout|orders/{id}/confirm|webhook|subscription
+services/payments/payments_app/__init__.py
+services/payments/tests/test_payments.py
+services/payments/requirements.txt
+services/payments/Dockerfile           # порт 8122
+services/payments/README.md
+
+services/docker-compose.yml            # converter+auth+payments (общий секрет)
+services/.env.example                  # PP_AUTH_SECRET
 ```
 
 ## API
-- `POST /license/activate` `{machine_id, key?}` → если ключа нет и триала не было: **старт триала 15 дней** (`trial_started_at`, `trial_expires_at`); если ключ есть — проверка и привязка (лимит 3 устройства); возврат `{status: trial|active|expired|invalid, expires_at, offline_token}`.
-- `POST /license/validate` `{machine_id, offline_token?}` → энтайтлменты `{pro: bool, until, trial_days_left}`.
-- `GET /license/entitlements/{machine_id}`.
-- `POST /webhooks/stripe`, `POST /webhooks/apple` — продление/отмена подписки, обновление `until`.
-- Офлайн-токен: подписанный JWT-подобный токен `{machine_id, until, tier}` (валиден 30 дней с даты выдачи; приложение кэширует).
+- auth: `POST /auth/register` `{email, password}` → `{token, user}`;
+  `POST /auth/login` → то же; `POST /auth/logout` (Bearer);
+  `GET /auth/me` (Bearer); `GET /healthz`.
+- payments: `GET /payments/plans`; `POST /payments/checkout` `{plan}` →
+  `{order_id, plan, amount_rub, status: pending, url, hint}`;
+  `POST /payments/orders/{id}/confirm` (Bearer) — тестовая оплата;
+  `POST /payments/webhook` `{order_id}` — заглушка вебхука провайдера;
+  `GET /payments/subscription` → `{plan, pro, until}`; `GET /healthz`.
 
-## Правила
-- Серверное время — источник истины (защита от перевода часов: триал стартует по дате сервера).
-- Один триал на machine_id навсегда (повторная активация после истечения → предложение подписки).
-- Ключи: формат `XXXX-XXXX-XXXX-XXXX`, выпуск админом, срок/кол-во активаций.
-- Все ответы — JSON; ошибки — русские тексты в `detail`.
+## Ключевые решения
+- Токены — HMAC-SHA256, stateless; подпись проверяют и auth, и payments
+  (общий `PP_AUTH_SECRET`). Сервисы не ходят друг к другу по HTTP.
+- Пароли — pbkdf2_hmac (sha256, 200k итераций, соль на пользователя).
+- Хранилище — SQLite: auth → users; payments → orders + subscriptions.
+- Подписка продлевается от конца текущей (если активна), иначе от сейчас.
+- Заказы приватны: confirm видит только заказ своего user_id (sub токена).
+- env: `PP_AUTH_SECRET` (обязателен, ≥16), `PP_DATA_DIR`, `PP_TOKEN_TTL`,
+  `PP_PUBLIC_BASE` (payments), `PP_MAX_MB` не нужен.
+- Ошибки — русские тексты в `detail`; 401/404/409/422 по смыслу.
 
 ## Тесты (pytest)
-1. activate без ключа → trial 15 дней; повторный activate после истечения (mock-время) → status=expired, pro=false.
-2. activate с ключом → active; 4-е устройство → ошибка «превышен лимит устройств».
-3. validate с валидным/просроченным/подделанным offline_token.
-4. webhook stripe (событие invoice.paid) → until продлевается.
-5. crypto: токен не принимается при изменении machine_id/until.
+1. auth: register→login→me; повторный register → 409; неверный пароль → 401;
+   некорректный email/короткий пароль → 422; me без токена → 401;
+   round-trip verify_token.
+2. payments: checkout требует токен; полный цикл checkout→confirm→Pro;
+   цепочка продлений (год после месяца от конца); чужой заказ → 404;
+   вебхук-заглушка; неизвестный план → 422.
 
 ## Критерии приёмки
-1. pytest зелёный. 2. .env.example без секретов. 3. Документация API (README).
+1. `pytest services/auth/tests services/payments/tests` — зелёный.
+2. Образы собираются (`docker build`), /healthz отвечает.
+3. .env.example без секретов; README с API каждого сервиса.
