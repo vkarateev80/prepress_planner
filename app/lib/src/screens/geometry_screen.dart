@@ -14,6 +14,7 @@ import 'package:flutter/material.dart';
 import 'package:prepress_core/prepress_core.dart';
 
 import '../converter/converter_api.dart';
+import '../converter/converter_server.dart';
 import '../logs/app_log.dart';
 import '../projects/project.dart';
 import '../widgets/geometry_canvas.dart';
@@ -98,6 +99,13 @@ class _GeometryScreenState extends State<GeometryScreen> {
 
   /// Адрес сервера конвертации (правится кнопкой-шестерёнкой).
   String _converterBase = ConverterApi.defaultBaseUrl();
+
+  /// Состояние локального сервера конвертации: null — не проверялся/не
+  /// запущен, true — отвечает, false — запуск не удался.
+  bool? _serverUp;
+
+  /// Идёт запуск сервера конвертации.
+  bool _serverStarting = false;
 
   Project get p => widget.project ?? Project(name: '');
 
@@ -204,6 +212,8 @@ class _GeometryScreenState extends State<GeometryScreen> {
                 icon: const Icon(Icons.settings_ethernet, size: 20),
                 onPressed: _busy ? null : _editServer,
               ),
+              const SizedBox(width: 8),
+              _serverButton(),
             ],
           ),
         ),
@@ -692,6 +702,68 @@ class _GeometryScreenState extends State<GeometryScreen> {
     );
     if (value != null && value.isNotEmpty) {
       setState(() => _converterBase = value);
+    }
+  }
+
+  /// Кнопка управления локальным сервером конвертации AI/CDR/EPS.
+  /// Состояния: запустить / запускается / работает.
+  Widget _serverButton() {
+    final Widget icon;
+    final String label;
+    if (_serverStarting) {
+      icon = const SizedBox(
+          width: 16,
+          height: 16,
+          child: CircularProgressIndicator(strokeWidth: 2));
+      label = 'Запуск сервера…';
+    } else if (_serverUp == true) {
+      icon = const Icon(Icons.check_circle, size: 18, color: Colors.green);
+      label = 'Сервер работает';
+    } else {
+      icon = const Icon(Icons.play_arrow, size: 18);
+      label = 'Запустить сервер';
+    }
+    return Tooltip(
+      message: 'Проверить и, если не запущен, поднять локальный сервер '
+          'конвертации AI/CDR/EPS ($_converterBase)',
+      child: OutlinedButton.icon(
+        onPressed: _serverStarting ? null : _startServer,
+        icon: icon,
+        label: Text(label),
+      ),
+    );
+  }
+
+  /// Проверка/запуск локального сервера конвертации (uvicorn). Результат —
+  /// в статус экрана и в журнал событий.
+  Future<void> _startServer() async {
+    if (_serverStarting) return;
+    setState(() {
+      _serverStarting = true;
+      _serverUp = null;
+    });
+    _log('Проверка сервера конвертации ($_converterBase)…');
+    try {
+      final server = ConverterServer(baseUrl: _converterBase);
+      final err = await server.ensureRunning();
+      if (!mounted) return;
+      if (err == null) {
+        setState(() {
+          _serverUp = true;
+          _status = 'Сервер конвертации работает ($_converterBase). '
+              'Импорт AI/CDR/EPS доступен.';
+        });
+        _log('Сервер конвертации работает ($_converterBase).');
+      } else {
+        setState(() {
+          _serverUp = false;
+          _status = 'Ошибка запуска сервера конвертации: $err';
+        });
+        _log('Ошибка запуска сервера конвертации: $err',
+            level: LogLevel.error);
+      }
+    } finally {
+      if (mounted) setState(() => _serverStarting = false);
     }
   }
 
