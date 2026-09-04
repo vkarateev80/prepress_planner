@@ -41,3 +41,25 @@ services/converter/tests/test_convert.py  # pytest: .ai/.cdr/.eps из fixtures/
 - ВАЖНО истории: Ghostscript «не стартует 0xC0000142» — про старую машину; на текущей
   GS 8.64 запускается, тесты реального EPS-прогона добавить в pytest (сейчас покрыт
   только флаг gs_available).
+
+## Удалённый сервер и горизонтальное масштабирование (2026-)
+- Цель: конвертер на Linux-сервере (Docker), рабочие ПК без Python; путь — общий
+  сервер, затем N воркеров.
+- `convert.py`: кросс-платформенный поиск движков — `PP_INKSCAPE/PP_GHOSTSCRIPT`
+  (если есть) → `cam_pipeline\…` репозитория → PATH (`inkscape`, `gs`, Windows-имена).
+- `jobs.py`: интерфейс очереди с двумя реализациями — `JobQueue` (memory, тесты/один
+  процесс) и `FileJobQueue` (статусы JSON в `<data>/jobs/<id>.json`, атомарная запись
+  tmp+os.replace, TTL-чистка фоновым потоком). Методы принимают `job_id`, а не объект —
+  несколько процессов/реплик видят чужие задачи.
+- `main.py`: env-конфиг `PP_DATA_DIR`, `PP_JOB_STORE` (memory|file), `PP_JOB_TTL_HOURS`,
+  `PP_MAX_MB`; эндпоинт `GET /healthz` (статус + наличие движков); shutdown через
+  lifespan.
+- Dockerfile: python:3.12-slim + apt inkscape/ghostscript/fonts-dejavu (самодостаточный
+  образ), `PP_JOB_STORE=file`, `--workers 2`. docker-compose.yml: volume `converter-data`
+  + healthcheck на /healthz.
+- Масштабирование: один хост — `--workers N`; несколько хостов — swarm
+  (`docker stack deploy`, `service scale`) с общим томом (NFS/Ceph) либо S3/Redis-слой
+  вместо локальных файлов. API не меняется.
+- Клиент (app): адрес сервера — env `PP_CONVERTER_URL` или шестерёнка на экране
+  «Геометрия»; кнопка «Запустить сервер» поднимает локальный uvicorn, только если адрес
+  локальный (127.0.0.1/localhost).

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Конвертация AI/CDR/EPS → SVG/PDF через локальные движки.
+r"""Конвертация AI/CDR/EPS → SVG/PDF через локальные движки.
 
 Ограничения песочницы разработки (проверено агентом 10):
 - subprocess с capture_output (пайпы) запрещён → движки запускаются с
@@ -19,19 +19,34 @@ from pathlib import Path
 _REPO = Path(__file__).resolve().parents[3]
 
 
-def _default_inkscape() -> Path:
-    """Inkscape из cam_pipeline репозитория (если есть), иначе старый дефолт."""
+def _default_inkscape() -> Path | None:
+    """Inkscape из cam_pipeline репозитория (если есть) или из PATH (Linux)."""
     cand = _REPO / "cam_pipeline" / "inkscape_engine" / "bin" / "inkscape.exe"
     if cand.exists():
         return cand
-    return Path(
+    found = shutil.which("inkscape")  # Linux/macOS: apt inkscape
+    if found:
+        return Path(found)
+    legacy = Path(
         r"C:\Users\user\Desktop\MyApp\vibe cam\cam_pipeline\inkscape_engine\bin\inkscape.exe")
+    return legacy if legacy.exists() else None
 
 
-INKSCAPE = Path(os.environ.get("PP_INKSCAPE") or _default_inkscape())
+def find_inkscape() -> Path | None:
+    """Поиск Inkscape: PP_INKSCAPE → cam_pipeline → PATH (Linux) → legacy."""
+    env_ink = os.environ.get("PP_INKSCAPE", "").strip()
+    if env_ink:
+        p = Path(env_ink)
+        if p.exists():
+            return p
+    return _default_inkscape()
+
+
+INKSCAPE = find_inkscape()
 
 # Базы установки Ghostscript (версия подбирается автоматически, старшая первой):
-# системные каталоги + движок cam_pipeline (если присутствует в репозитории).
+# системные каталоги Windows + движок cam_pipeline (если есть в репозитории) +
+# PATH (Linux: apt ghostscript → /usr/bin/gs).
 _GS_BASES = [
     Path(r"C:\Program Files\gs"),
     Path(r"C:\Program Files (x86)\gs"),
@@ -44,7 +59,8 @@ if _cam_gs.is_dir():
 def find_ghostscript() -> "Path | None":
     """Поиск исполняемого файла Ghostscript.
 
-    Приоритет: PP_GHOSTSCRIPT (если существует) → PATH → каталоги установки
+    Приоритет: PP_GHOSTSCRIPT (если существует) → PATH (Linux: gs;
+    Windows: gswin64c/gswin32c) → каталоги установки
     C:\\Program Files[ (x86)]\\gs\\<версия>\\bin и cam_pipeline\\ghostscript_engine.
     Если движок не найден — возвращается None (конвертер EPS даст понятную
     ошибку с подсказкой).
@@ -54,7 +70,7 @@ def find_ghostscript() -> "Path | None":
         p = Path(env_gs)
         if p.exists():
             return p
-    for name in ("gswin64c.exe", "gswin32c.exe", "gs.exe"):
+    for name in ("gs", "gswin64c.exe", "gswin32c.exe", "gs.exe"):
         found = shutil.which(name)
         if found:
             return Path(found)
@@ -99,7 +115,7 @@ def gs_available() -> bool:
 
 
 def inkscape_available() -> bool:
-    return INKSCAPE.exists()
+    return INKSCAPE is not None and INKSCAPE.exists()
 
 
 def _is_pdf_compatible(path: Path) -> bool:

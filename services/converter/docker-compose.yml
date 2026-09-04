@@ -1,0 +1,38 @@
+# Конвертер AI/CDR/EPS (один инстанс, параллелизм через uvicorn --workers).
+#
+# Быстрый старт:
+#   docker compose up -d --build
+#   curl http://localhost:8120/healthz
+#
+# Один инстанс уже конвертирует параллельно (Dockerfile: --workers 2,
+# статусы — file-очередь на общем volume). Этого достаточно для сервера.
+#
+# Горизонтальное масштабирование (несколько реплик/хостов) — swarm:
+#   1) общий том данных для всех реплик (NFS/Ceph/…), он же PP_DATA_DIR;
+#   2) docker stack deploy -c docker-compose.yml converter
+#   3) docker service scale converter_converter=5
+# Порт наружу публикует ingress-сеть swarm; PP_JOB_STORE=file позволяет
+# репликам видеть статусы чужих задач (см. README, раздел масштабирования).
+services:
+  converter:
+    build: .
+    image: pp-converter:latest
+    ports:
+      - "8120:8120"
+    environment:
+      PP_DATA_DIR: /srv/converter/data
+      PP_JOB_STORE: file
+      PP_JOB_TTL_HOURS: "24"
+    volumes:
+      - converter-data:/srv/converter/data
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8120/healthz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  converter-data:
