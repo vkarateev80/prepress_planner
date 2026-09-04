@@ -48,11 +48,11 @@ class ConverterApi implements Converter {
     this.timeout = const Duration(seconds: 180),
   }) : baseUrl = baseUrl ?? defaultBaseUrl();
 
-  /// Адрес по умолчанию: env PP_CONVERTER_URL либо http://127.0.0.1:8120.
+  /// Адрес по умолчанию: env PP_CONVERTER_URL либо VPS-сервер конвертации.
   static String defaultBaseUrl() {
     final env = Platform.environment['PP_CONVERTER_URL'];
     if (env != null && env.trim().isNotEmpty) return env.trim();
-    return 'http://127.0.0.1:8120';
+    return 'http://193.233.193.12:8120';
   }
 
   static const _closedExts = {'.ai', '.cdr', '.eps'};

@@ -13,8 +13,8 @@
 - `lib/src/screens/*` — экраны; `lib/src/widgets/*` — форма раскроя, таблица вариантов, canvas.
 - `lib/src/converter/` — HTTP-клиент к сервису конвертации (`ConverterApi`, dart:io, без
   внешних пакетов): импорт закрытых форматов AI/CDR/EPS → SVG. Адрес по умолчанию
-  `http://127.0.0.1:8120`, переопределяется env `PP_CONVERTER_URL` или кнопкой
-  в UI экрана «Геометрия».
+  `http://193.233.193.12:8120` (VPS-сервер), переопределяется env `PP_CONVERTER_URL`
+  или кнопкой в UI экрана «Геометрия».
 - `lib/license/` — клиент лицензий: `LicenseClient` (HTTP/офлайн-заглушка), `EntitlementStore`
   (кэш + грэйс 30 дн.), `FeatureGate` (Free/Pro, триал), `TrialTimer`, `LicenseController`
   (ChangeNotifier), `PaywallScreen` + хелперы `openPaywall`/`showProSheet`.

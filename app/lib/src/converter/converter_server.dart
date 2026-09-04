@@ -24,7 +24,18 @@ class ConverterServer {
   final String baseUrl;
 
   ConverterServer({String? baseUrl})
-      : baseUrl = baseUrl ?? 'http://127.0.0.1:8120';
+      : baseUrl = baseUrl ?? 'http://193.233.193.12:8120';
+
+  /// Локальный ли адрес (только для такого можно поднять uvicorn на этом ПК).
+  static bool isLocal(String baseUrl) {
+    final uri = Uri.tryParse(baseUrl);
+    if (uri == null || !uri.hasScheme) return false;
+    final host = uri.host;
+    return host == '127.0.0.1' ||
+        host == 'localhost' ||
+        host == '::1' ||
+        host == '0.0.0.0';
+  }
 
   /// Сервер отвечает по HTTP (любой статус — значит процесс жив).
   Future<bool> probe() async {
@@ -56,11 +67,7 @@ class ConverterServer {
     final host = uri.hasScheme
         ? (uri.host.isEmpty ? '127.0.0.1' : uri.host)
         : '127.0.0.1';
-    final isLocal = host == '127.0.0.1' ||
-        host == 'localhost' ||
-        host == '::1' ||
-        host == '0.0.0.0';
-    if (!isLocal) {
+    if (!isLocal(baseUrl)) {
       return 'Сервер $host недоступен, а это удалённый адрес — локально '
           'запустить его нельзя. Проверьте адрес или доступность сервера.';
     }

@@ -675,7 +675,7 @@ class _GeometryScreenState extends State<GeometryScreen> {
   }
 
   /// Смена адреса сервера конвертации (по умолчанию env PP_CONVERTER_URL
-  /// либо http://127.0.0.1:8120).
+  /// либо VPS-сервер http://193.233.193.12:8120).
   Future<void> _editServer() async {
     final ctrl = TextEditingController(text: _converterBase);
     final value = await showDialog<String>(
@@ -686,7 +686,7 @@ class _GeometryScreenState extends State<GeometryScreen> {
           controller: ctrl,
           autofocus: true,
           decoration: const InputDecoration(
-              labelText: 'Адрес (например, http://127.0.0.1:8120)',
+              labelText: 'Адрес (например, http://193.233.193.12:8120)',
               border: OutlineInputBorder(),
               isDense: true),
         ),
@@ -705,9 +705,11 @@ class _GeometryScreenState extends State<GeometryScreen> {
     }
   }
 
-  /// Кнопка управления локальным сервером конвертации AI/CDR/EPS.
-  /// Состояния: запустить / запускается / работает.
+  /// Кнопка управления сервером конвертации AI/CDR/EPS.
+  /// Локальный адрес: «Запустить сервер» (поднять uvicorn на этом ПК).
+  /// Удалённый адрес: «Проверить сервер» (проверить доступность).
   Widget _serverButton() {
+    final local = ConverterServer.isLocal(_converterBase);
     final Widget icon;
     final String label;
     if (_serverStarting) {
@@ -715,17 +717,20 @@ class _GeometryScreenState extends State<GeometryScreen> {
           width: 16,
           height: 16,
           child: CircularProgressIndicator(strokeWidth: 2));
-      label = 'Запуск сервера…';
+      label = local ? 'Запуск сервера…' : 'Проверка сервера…';
     } else if (_serverUp == true) {
       icon = const Icon(Icons.check_circle, size: 18, color: Colors.green);
       label = 'Сервер работает';
     } else {
       icon = const Icon(Icons.play_arrow, size: 18);
-      label = 'Запустить сервер';
+      label = local ? 'Запустить сервер' : 'Проверить сервер';
     }
     return Tooltip(
-      message: 'Проверить и, если не запущен, поднять локальный сервер '
-          'конвертации AI/CDR/EPS ($_converterBase)',
+      message: local
+          ? 'Проверить и, если не запущен, поднять локальный сервер '
+              'конвертации AI/CDR/EPS ($_converterBase)'
+          : 'Проверить доступность удалённого сервера конвертации '
+              'AI/CDR/EPS ($_converterBase)',
       child: OutlinedButton.icon(
         onPressed: _serverStarting ? null : _startServer,
         icon: icon,
@@ -734,8 +739,9 @@ class _GeometryScreenState extends State<GeometryScreen> {
     );
   }
 
-  /// Проверка/запуск локального сервера конвертации (uvicorn). Результат —
-  /// в статус экрана и в журнал событий.
+  /// Проверка сервера конвертации: для локального адреса — запуск uvicorn,
+  /// для удалённого — только проверка доступности. Результат — в статус
+  /// экрана и в журнал событий.
   Future<void> _startServer() async {
     if (_serverStarting) return;
     setState(() {
@@ -745,7 +751,13 @@ class _GeometryScreenState extends State<GeometryScreen> {
     _log('Проверка сервера конвертации ($_converterBase)…');
     try {
       final server = ConverterServer(baseUrl: _converterBase);
-      final err = await server.ensureRunning();
+      final String? err;
+      if (ConverterServer.isLocal(_converterBase)) {
+        err = await server.ensureRunning();
+      } else {
+        // Удалённый адрес: запускать локально бессмысленно — только проба.
+        err = (await server.probe()) ? null : 'сервер недоступен';
+      }
       if (!mounted) return;
       if (err == null) {
         setState(() {
@@ -757,9 +769,12 @@ class _GeometryScreenState extends State<GeometryScreen> {
       } else {
         setState(() {
           _serverUp = false;
-          _status = 'Ошибка запуска сервера конвертации: $err';
+          _status = ConverterServer.isLocal(_converterBase)
+              ? 'Ошибка запуска сервера конвертации: $err'
+              : 'Сервер конвертации недоступен ($_converterBase): $err. '
+                  'Проверьте адрес и сеть.';
         });
-        _log('Ошибка запуска сервера конвертации: $err',
+        _log('Сервер конвертации недоступен: $err',
             level: LogLevel.error);
       }
     } finally {
