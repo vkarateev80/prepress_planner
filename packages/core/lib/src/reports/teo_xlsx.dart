@@ -128,12 +128,12 @@ List<List<_Cell>> _sheetRaschet(TeoReportData d) {
     ['Оборотов', c.revs],
     ['Этикеток (N)', c.count],
     ['Заказ N', c.countRequested],
-    ['Длина полотна, мм', c.length],
+    ['Длина полотна, м', c.length / 1000],
     ['Площадь полотна, м²', d.consumption.areaMm2 / 1e6],
     ['Площадь этикеток, м²', d.consumption.usedAreaMm2 / 1e6],
     ['Отходы, %', c.wastePct],
     ['Отходы, м²', d.consumption.wasteMm2 / 1e6],
-    ['На этикетку, мм²', c.perLabelArea],
+    ['На этикетку, м²', c.perLabelArea / 1e6],
   ];
   return rows;
 }
@@ -154,6 +154,8 @@ List<List<_Cell>> _sheetTeo(TeoReportData d) {
     ['Всего времени, ч', t.totalTimeHours],
     ['Стоимость машиночасов, ${d.currency}', t.machineCost],
     ['Стоимость материала, ${d.currency}', t.materialCost],
+    ['Занято смен', t.shiftsUsed],
+    ['Стоимость смен, ${d.currency}', t.shiftCost],
     ['Оснастка, ${d.currency}', t.toolingCost],
     ['Наценка, ${d.currency}', t.markupCost],
     ['ИТОГО, ${d.currency}', t.totalCost],
@@ -167,7 +169,7 @@ List<List<_Cell>> _sheetTeo(TeoReportData d) {
 
 List<List<_Cell>> _sheetVariants(TeoReportData d) {
   final rows = <List<_Cell>>[
-    ['№', 'Сетка (R×C)', 'Повёрнут', 'N', 'Отходы, %', 'Длина, мм',
+    ['№', 'Сетка (R×C)', 'Повёрнут', 'N', 'Отходы, %', 'Длина, м',
         'Себестоимость 1000 шт'],
   ];
   var n = 1;
@@ -178,7 +180,7 @@ List<List<_Cell>> _sheetVariants(TeoReportData d) {
       v.rotated ? 'да' : '—',
       v.count,
       v.wastePct,
-      v.length,
+      v.length / 1000,
       t.costPer1000,
     ]);
     n++;

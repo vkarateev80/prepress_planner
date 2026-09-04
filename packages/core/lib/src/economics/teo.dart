@@ -36,13 +36,28 @@ class TeoInput {
   final double toolingCost; // ₽/заказ, 0 — нет
   final double markupPct; // % от (материал + машина + оснастка), 0 — нет
 
+  /// Расход материала на приладку, погонные метры полотна. Если null —
+  /// берётся значение машины [Machine.setupMaterialMeters] из каталога.
+  final double? setupMaterialMeters;
+
+  /// Стоимость одной рабочей смены, ₽ (0 — не учитывается). Учитывается
+  /// за каждую занятую смену: смен = ⌈(время работы + переналадка) / часов
+  /// в смене⌉.
+  final double shiftCostPerShift;
+
   const TeoInput({
     required this.material,
     required this.machine,
     this.workTime = const WorkTime(),
     this.toolingCost = 0,
     this.markupPct = 0,
+    this.setupMaterialMeters,
+    this.shiftCostPerShift = 0,
   });
+
+  /// Итоговые метры полотна на приладку (явные либо из каталога машины).
+  double get materialSetupMeters =>
+      setupMaterialMeters ?? machine.setupMaterialMeters;
 }
 
 /// Результат ТЭО варианта раскроя. [error] != null — расчёт невозможен
@@ -52,6 +67,8 @@ class TeoResult {
   final double runTimeHours; // машинное время печати
   final double setupTimeHours; // переналадка
   final double totalTimeHours; // runTime + setup
+  final int shiftsUsed; // занятых смен: ceil(totalTime / часов в смене)
+  final double shiftCost; // стоимость занятых смен, ₽
   final double machineCost; // ₽
   final double materialCost; // ₽
   final double toolingCost; // ₽
@@ -69,6 +86,8 @@ class TeoResult {
     this.runTimeHours = 0,
     this.setupTimeHours = 0,
     this.totalTimeHours = 0,
+    this.shiftsUsed = 0,
+    this.shiftCost = 0,
     this.machineCost = 0,
     this.materialCost = 0,
     this.toolingCost = 0,
@@ -114,11 +133,24 @@ TeoResult computeTeo(MaterialResult calc, Consumption cons, TeoInput input) {
 
   // 2) Статьи затрат (по неокруглённым значениям).
   final machineCostRaw = (setup + run) * input.machine.ratePerHour;
-  final materialCostRaw = cons.areaM2 * input.material.pricePerM2;
+  // Материал: площадь полотна тиража + метры приладки (ширина полотна, м).
+  final webWidthM = calc.webWidth / 1000.0;
+  final materialCostRaw = cons.areaM2 * input.material.pricePerM2 +
+      input.materialSetupMeters * webWidthM * input.material.pricePerM2;
   final toolingRaw = input.toolingCost;
-  final markupRaw =
-      input.markupPct * (materialCostRaw + machineCostRaw + toolingRaw) / 100.0;
-  final totalRaw = materialCostRaw + machineCostRaw + toolingRaw + markupRaw;
+  // Стоимость смен: занятых смен × цена смены.
+  final shiftHours = input.workTime.hoursPerShift > 0
+      ? input.workTime.hoursPerShift
+      : 1.0;
+  final shiftsUsed =
+      (setup + run) > 0 ? ((setup + run) / shiftHours).ceil() : 0;
+  final shiftCostRaw = shiftsUsed * input.shiftCostPerShift;
+  final markupBase = materialCostRaw +
+      machineCostRaw +
+      toolingRaw +
+      shiftCostRaw;
+  final markupRaw = input.markupPct * markupBase / 100.0;
+  final totalRaw = markupBase + markupRaw;
 
   // 3) Загрузка смены.
   final capacity =
@@ -134,6 +166,8 @@ TeoResult computeTeo(MaterialResult calc, Consumption cons, TeoInput input) {
     runTimeHours: runHours,
     setupTimeHours: _round4(setup),
     totalTimeHours: totalHours,
+    shiftsUsed: shiftsUsed,
+    shiftCost: _round2(shiftCostRaw),
     machineCost: _round2(machineCostRaw),
     materialCost: _round2(materialCostRaw),
     toolingCost: _round2(toolingRaw),

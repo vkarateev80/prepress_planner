@@ -169,7 +169,7 @@ void testXlsxStructure() {
   expect(_containsAscii(bytes, '<v>5040</v>'), 'N = 5040 в ячейке');
   expect(_containsAscii(bytes, '26.18'), 'отходы 26.18%');
   expect(_containsAscii(bytes, '704.88'), 'costPer1000 = 704.88');
-  expect(_containsAscii(bytes, '2032.0'), 'на этикетку 2032.0 мм²');
+  expect(_containsAscii(bytes, '0.002032'), 'на этикетку 0.002032 м²');
   expect(_containsAscii(bytes, '3552.58'), 'ИТОГО 3552.58');
   expect(_containsAscii(bytes, '10.24128'), 'площадь 10.24128 м²');
   ok('xlsx_structure');

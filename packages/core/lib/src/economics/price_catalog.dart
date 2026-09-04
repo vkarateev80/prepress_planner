@@ -49,6 +49,7 @@ class PriceCatalog {
               'speedMetersPerMin': m.speedMetersPerMin,
             if (m.labelsPerHour != null) 'labelsPerHour': m.labelsPerHour,
             'setupTimeHours': m.setupTimeHours,
+            'setupMaterialMeters': m.setupMaterialMeters,
           }
       ],
     };
@@ -83,6 +84,8 @@ class PriceCatalog {
           speedMetersPerMin: (m['speedMetersPerMin'] as num?)?.toDouble(),
           labelsPerHour: (m['labelsPerHour'] as num?)?.toInt(),
           setupTimeHours: (m['setupTimeHours'] as num?)?.toDouble() ?? 0.0,
+          setupMaterialMeters:
+              (m['setupMaterialMeters'] as num?)?.toDouble() ?? 0.0,
         ));
       }
     }

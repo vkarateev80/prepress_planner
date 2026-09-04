@@ -15,6 +15,11 @@ class Machine {
   final int? labelsPerHour; // …или производительность, этикеток/ч
   final double setupTimeHours; // переналадка на заказ, ч
 
+  /// Расход материала на приладку (переналадку), погонные метры полотна.
+  /// Эти метры прибавляются к длине полотна тиража и увеличивают расход
+  /// материала (стоимость), машинное время не меняют.
+  final double setupMaterialMeters;
+
   const Machine({
     required this.id,
     required this.name,
@@ -22,6 +27,7 @@ class Machine {
     this.speedMetersPerMin,
     this.labelsPerHour,
     this.setupTimeHours = 0,
+    this.setupMaterialMeters = 0,
   });
 }
 

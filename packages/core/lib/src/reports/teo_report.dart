@@ -63,6 +63,12 @@ String _pct(double v) => '${_d2(v)} %';
 String _cur(double v, String c) => '${_d2(v)} $c';
 String _mm(double v) => '${_d2(v)} мм';
 String _hours(double v) => '${v} ч';
+
+/// Материальная длина: мм → метры (3 знака).
+String _m(double mm) => '${(mm / 1000.0).toStringAsFixed(3)} м';
+
+/// Материальная площадь: мм² → м² (6 знаков — «на этикетку» малая).
+String _m2(double mm2) => '${(mm2 / 1e6).toStringAsFixed(6)} м²';
 String _date(DateTime d) {
   String p(int x) => x.toString().padLeft(2, '0');
   return '${p(d.day)}.${p(d.month)}.${d.year} ${p(d.hour)}:${p(d.minute)}';
@@ -192,15 +198,12 @@ void _layout(PdfDocument doc, TeoReportData d) {
   f.row('Этикеток за оборот', '${c.perRev}');
   f.row('Оборотов полотна', '${c.revs}');
   f.row('Этикеток (N)', '${c.count} шт (заказ ${c.countRequested})');
-  f.row('Длина полотна', '${_mm(c.length)}');
-  f.row('Площадь полотна',
-      '${(d.consumption.areaMm2 / 1e6).toStringAsFixed(5)} м² '
-      '(${_mm2(c.areaMm2)})');
+  f.row('Длина полотна', '${_m(c.length)}');
+  f.row('Площадь полотна', '${_m2(c.areaMm2)}');
   f.row('Площадь этикеток (форма)',
-      '${(d.consumption.usedAreaMm2 / 1e6).toStringAsFixed(5)} м²');
-  f.row('Отходы',
-      '${_pct(c.wastePct)} (${(d.consumption.wasteMm2 / 1e6).toStringAsFixed(5)} м²)');
-  f.row('Полотно на этикетку', '${_mm2(c.perLabelArea)}');
+      '${_m2(d.consumption.usedAreaMm2)}');
+  f.row('Отходы', '${_pct(c.wastePct)} (${_m2(d.consumption.wasteMm2)})');
+  f.row('Полотно на этикетку', '${_m2(c.perLabelArea)}');
 
   // ---------- 3. Производство ----------
   f.header('3. ПРОИЗВОДСТВО');
@@ -223,6 +226,8 @@ void _layout(PdfDocument doc, TeoReportData d) {
   f.row('Сортамент',
       '${d.material.name}; ${_cur(d.material.pricePerM2, d.currency)}/м²');
   f.row('Стоимость материала', _cur(t.materialCost, d.currency));
+  f.row('Занято смен', '${t.shiftsUsed}');
+  f.row('Стоимость смен', _cur(t.shiftCost, d.currency));
   f.row('Оснастка (на заказ)', _cur(t.toolingCost, d.currency));
   f.row('Наценка', _cur(t.markupCost, d.currency));
   f.row('ИТОГО', _cur(t.totalCost, d.currency));
@@ -276,7 +281,6 @@ void _layout(PdfDocument doc, TeoReportData d) {
       yTop: doc.pageHeight - 24, size: 7);
 }
 
-String _mm2(double v) => '${_d2(v)} мм²';
 String _d4(double v) => v.toStringAsFixed(4);
 
 void _tableHeader(_Flow f) {
