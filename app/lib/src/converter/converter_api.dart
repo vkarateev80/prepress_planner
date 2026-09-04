@@ -90,9 +90,9 @@ class ConverterApi implements Converter {
           'Сервер конвертации не отвечает (превышено время ожидания запроса).');
     } on SocketException catch (e) {
       throw ConverterException(
-          'Сервис конвертации недоступен ($baseUrl): '
+          'Сервис конвертации недоступен: '
           '${e.osError?.message ?? e.message}. '
-          'Запустите сервис: uvicorn converter_app.main:app --port 8120');
+          'Проверьте подключение к серверу конвертации.');
     } on HttpException catch (e) {
       throw ConverterException('Ошибка HTTP при обращении к серверу: ${e.message}');
     } finally {

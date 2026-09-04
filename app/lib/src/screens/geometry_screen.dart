@@ -182,11 +182,11 @@ class _GeometryScreenState extends State<GeometryScreen> {
                       '«Обзор…».',
                   child: TextField(
                     controller: _pathCtrl,
-                    decoration: InputDecoration(
+                    decoration: const InputDecoration(
                         labelText: 'Путь к файлу (DXF/SVG/PDF/AI/CDR/EPS)',
                         helperText:
-                            'AI/CDR/EPS конвертируются сервером: $_converterBase',
-                        border: const OutlineInputBorder(),
+                            'AI/CDR/EPS конвертируются автоматически',
+                        border: OutlineInputBorder(),
                         isDense: true),
                   ),
                 ),
@@ -206,11 +206,6 @@ class _GeometryScreenState extends State<GeometryScreen> {
                     onPressed: _busy ? null : _browse,
                     icon: const Icon(Icons.folder_open, size: 18),
                     label: const Text('Обзор')),
-              ),
-              IconButton(
-                tooltip: 'Адрес сервера конвертации AI/CDR/EPS',
-                icon: const Icon(Icons.settings_ethernet, size: 20),
-                onPressed: _busy ? null : _editServer,
               ),
               const SizedBox(width: 8),
               _serverButton(),
@@ -548,17 +543,15 @@ class _GeometryScreenState extends State<GeometryScreen> {
 
   /// AI/CDR/EPS: конвертация через services/converter, затем разбор SVG.
   Future<void> _importClosed(String path, Project project) async {
-    final conv = _converter;
     setState(() {
       _busy = true;
       _master = null; // новый файл — старый мастер массива недействителен
-      _status =
-          'Конвертация закрытого формата через сервер (${conv.baseUrl})…';
+      _status = 'Конвертация закрытого формата на сервере…';
     });
-    _log('Конвертация закрытого формата через сервер ${conv.baseUrl}…');
+    _log('Конвертация закрытого формата…');
     File? tmp;
     try {
-      final svg = await conv.convertToSvg(File(path));
+      final svg = await _converter.convertToSvg(File(path));
       tmp = File('${Directory.systemTemp.path}/pp_import_'
           '${DateTime.now().microsecondsSinceEpoch}.svg');
       await tmp.writeAsBytes(svg, flush: true);
@@ -674,40 +667,10 @@ class _GeometryScreenState extends State<GeometryScreen> {
     _log('Выбран файл: $picked');
   }
 
-  /// Смена адреса сервера конвертации (по умолчанию env PP_CONVERTER_URL
-  /// либо VPS-сервер http://193.233.193.12:8120).
-  Future<void> _editServer() async {
-    final ctrl = TextEditingController(text: _converterBase);
-    final value = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Сервер конвертации AI/CDR/EPS'),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-          decoration: const InputDecoration(
-              labelText: 'Адрес (например, http://193.233.193.12:8120)',
-              border: OutlineInputBorder(),
-              isDense: true),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Отмена')),
-          FilledButton(
-              onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
-              child: const Text('Сохранить')),
-        ],
-      ),
-    );
-    if (value != null && value.isNotEmpty) {
-      setState(() => _converterBase = value);
-    }
-  }
-
   /// Кнопка управления сервером конвертации AI/CDR/EPS.
   /// Локальный адрес: «Запустить сервер» (поднять uvicorn на этом ПК).
   /// Удалённый адрес: «Проверить сервер» (проверить доступность).
+  /// Адрес пользователю не показывается (скрыт).
   Widget _serverButton() {
     final local = ConverterServer.isLocal(_converterBase);
     final Widget icon;
@@ -728,9 +691,8 @@ class _GeometryScreenState extends State<GeometryScreen> {
     return Tooltip(
       message: local
           ? 'Проверить и, если не запущен, поднять локальный сервер '
-              'конвертации AI/CDR/EPS ($_converterBase)'
-          : 'Проверить доступность удалённого сервера конвертации '
-              'AI/CDR/EPS ($_converterBase)',
+              'конвертации AI/CDR/EPS'
+          : 'Проверить доступность сервера конвертации AI/CDR/EPS',
       child: OutlinedButton.icon(
         onPressed: _serverStarting ? null : _startServer,
         icon: icon,
@@ -741,14 +703,14 @@ class _GeometryScreenState extends State<GeometryScreen> {
 
   /// Проверка сервера конвертации: для локального адреса — запуск uvicorn,
   /// для удалённого — только проверка доступности. Результат — в статус
-  /// экрана и в журнал событий.
+  /// экрана и в журнал событий (без показа адреса).
   Future<void> _startServer() async {
     if (_serverStarting) return;
     setState(() {
       _serverStarting = true;
       _serverUp = null;
     });
-    _log('Проверка сервера конвертации ($_converterBase)…');
+    _log('Проверка сервера конвертации…');
     try {
       final server = ConverterServer(baseUrl: _converterBase);
       final String? err;
@@ -762,17 +724,15 @@ class _GeometryScreenState extends State<GeometryScreen> {
       if (err == null) {
         setState(() {
           _serverUp = true;
-          _status = 'Сервер конвертации работает ($_converterBase). '
-              'Импорт AI/CDR/EPS доступен.';
+          _status = 'Сервер конвертации работает. Импорт AI/CDR/EPS доступен.';
         });
-        _log('Сервер конвертации работает ($_converterBase).');
+        _log('Сервер конвертации работает.');
       } else {
         setState(() {
           _serverUp = false;
           _status = ConverterServer.isLocal(_converterBase)
               ? 'Ошибка запуска сервера конвертации: $err'
-              : 'Сервер конвертации недоступен ($_converterBase): $err. '
-                  'Проверьте адрес и сеть.';
+              : 'Сервер конвертации недоступен: $err. Проверьте сеть.';
         });
         _log('Сервер конвертации недоступен: $err',
             level: LogLevel.error);
