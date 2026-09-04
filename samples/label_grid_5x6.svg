@@ -1,0 +1,35 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="262mm" height="195mm" viewBox="0 0 2620 1950">
+  <!-- Тестовый массив этикеток: этикетка 50x30 мм, шаг 53x33 мм (зазор 3 мм), 5 колонок x 6 рядов. -->
+  <rect x="0" y="0" width="500" height="300"/>
+  <rect x="530" y="0" width="500" height="300"/>
+  <rect x="1060" y="0" width="500" height="300"/>
+  <rect x="1590" y="0" width="500" height="300"/>
+  <rect x="2120" y="0" width="500" height="300"/>
+  <rect x="0" y="330" width="500" height="300"/>
+  <rect x="530" y="330" width="500" height="300"/>
+  <rect x="1060" y="330" width="500" height="300"/>
+  <rect x="1590" y="330" width="500" height="300"/>
+  <rect x="2120" y="330" width="500" height="300"/>
+  <rect x="0" y="660" width="500" height="300"/>
+  <rect x="530" y="660" width="500" height="300"/>
+  <rect x="1060" y="660" width="500" height="300"/>
+  <rect x="1590" y="660" width="500" height="300"/>
+  <rect x="2120" y="660" width="500" height="300"/>
+  <rect x="0" y="990" width="500" height="300"/>
+  <rect x="530" y="990" width="500" height="300"/>
+  <rect x="1060" y="990" width="500" height="300"/>
+  <rect x="1590" y="990" width="500" height="300"/>
+  <rect x="2120" y="990" width="500" height="300"/>
+  <rect x="0" y="1320" width="500" height="300"/>
+  <rect x="530" y="1320" width="500" height="300"/>
+  <rect x="1060" y="1320" width="500" height="300"/>
+  <rect x="1590" y="1320" width="500" height="300"/>
+  <rect x="2120" y="1320" width="500" height="300"/>
+  <rect x="0" y="1650" width="500" height="300"/>
+  <rect x="530" y="1650" width="500" height="300"/>
+  <rect x="1060" y="1650" width="500" height="300"/>
+  <rect x="1590" y="1650" width="500" height="300"/>
+  <rect x="2120" y="1650" width="500" height="300"/>
+</svg>
+

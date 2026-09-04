@@ -4,23 +4,73 @@
 Ограничения песочницы разработки (проверено агентом 10):
 - subprocess с capture_output (пайпы) запрещён → движки запускаются с
   stdout/stderr в файлы (stdio: файловые дескрипторы).
-- Ghostscript в этой среде не стартует (0xC0000142) → EPS-пути помечены
-  skipif-проверкой доступности GS.
-- Работает Inkscape: .ai→svg, .cdr→svg/pdf, svg→pdf.
+- Ghostscript ищется автоматически (PP_GHOSTSCRIPT или стандартные пути
+  установки; проверено на Ghostscript 8.64 в "C:\Program Files (x86)\gs").
+- Работает Inkscape: .ai→svg, .cdr→svg/pdf, svg→pdf, pdf→svg.
 - quadroring.ai — это %PDF-1.5: копия в .pdf срабатывает без движков.
 """
+import glob
 import os
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
-INKSCAPE = Path(os.environ.get(
-    "PP_INKSCAPE",
-    r"C:\Users\user\Desktop\MyApp\vibe cam\cam_pipeline\inkscape_engine\bin\inkscape.exe"))
-GHOSTSCRIPT = Path(os.environ.get(
-    "PP_GHOSTSCRIPT",
-    r"C:\Users\user\Desktop\MyApp\vibe cam\cam_pipeline\ghostscript_engine\gs10.07.1\bin\gswin64c.exe"))
+_REPO = Path(__file__).resolve().parents[3]
+
+
+def _default_inkscape() -> Path:
+    """Inkscape из cam_pipeline репозитория (если есть), иначе старый дефолт."""
+    cand = _REPO / "cam_pipeline" / "inkscape_engine" / "bin" / "inkscape.exe"
+    if cand.exists():
+        return cand
+    return Path(
+        r"C:\Users\user\Desktop\MyApp\vibe cam\cam_pipeline\inkscape_engine\bin\inkscape.exe")
+
+
+INKSCAPE = Path(os.environ.get("PP_INKSCAPE") or _default_inkscape())
+
+# Базы установки Ghostscript (версия подбирается автоматически, старшая первой):
+# системные каталоги + движок cam_pipeline (если присутствует в репозитории).
+_GS_BASES = [
+    Path(r"C:\Program Files\gs"),
+    Path(r"C:\Program Files (x86)\gs"),
+]
+_cam_gs = _REPO / "cam_pipeline" / "ghostscript_engine"
+if _cam_gs.is_dir():
+    _GS_BASES.append(_cam_gs)
+
+
+def find_ghostscript() -> "Path | None":
+    """Поиск исполняемого файла Ghostscript.
+
+    Приоритет: PP_GHOSTSCRIPT (если существует) → PATH → каталоги установки
+    C:\\Program Files[ (x86)]\\gs\\<версия>\\bin и cam_pipeline\\ghostscript_engine.
+    Если движок не найден — возвращается None (конвертер EPS даст понятную
+    ошибку с подсказкой).
+    """
+    env_gs = os.environ.get("PP_GHOSTSCRIPT", "").strip()
+    if env_gs:
+        p = Path(env_gs)
+        if p.exists():
+            return p
+    for name in ("gswin64c.exe", "gswin32c.exe", "gs.exe"):
+        found = shutil.which(name)
+        if found:
+            return Path(found)
+    for base in _GS_BASES:
+        if not base.is_dir():
+            continue
+        # <base>/<версия>/bin/gswin64c.exe | gswin32c.exe
+        for bin_dir in glob.glob(str(base / "*" / "bin")):
+            for name in ("gswin64c.exe", "gswin32c.exe", "gs.exe"):
+                cand = Path(bin_dir) / name
+                if cand.exists():
+                    return cand
+    return None
+
+
+GHOSTSCRIPT = find_ghostscript()
 
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
@@ -38,7 +88,7 @@ def _run_file_stdio(cmd, log_path: Path) -> int:
 
 
 def gs_available() -> bool:
-    if not GHOSTSCRIPT.exists():
+    if GHOSTSCRIPT is None or not GHOSTSCRIPT.exists():
         return False
     try:
         with tempfile.TemporaryDirectory() as td:
@@ -131,11 +181,15 @@ def convert(src: Path, target: str, work_dir: Path) -> Path:
                 f"(см. {log.name})")
         return out
 
-    # 3) EPS: Ghostscript → PDF (в песочнице GS может быть недоступен).
+    # 3) EPS: Ghostscript → PDF (GS ищется автоматически; если его нет —
+    #    понятная ошибка с подсказкой).
     if ext == ".eps":
         if not gs_available():
             raise ConversionError(
-                "Не удалось разобрать файл: Ghostscript недоступен в этой среде")
+                "Не удалось разобрать файл: Ghostscript не найден в этой "
+                "среде. Установите Ghostscript или укажите PP_GHOSTSCRIPT "
+                "(проверяются C:\\Program Files\\gs и C:\\Program Files "
+                "(x86)\\gs).")
         mid = work_dir / "mid.pdf"
         out = work_dir / f"result.{target}"
         rc = _run_file_stdio(

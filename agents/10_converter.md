@@ -28,3 +28,16 @@ services/converter/tests/test_convert.py  # pytest: .ai/.cdr/.eps из fixtures/
 
 ## Критерии приёмки
 1. `pytest services/converter/tests` зелёный (python из cam_pipeline venv или системный с fastapi). 2. Docker-образ собирается (если доступен docker — иначе Dockerfile проверяется ревью).
+
+## Движки и поиск Ghostscript (реализовано 2026-09-03)
+- `convert.py` ищет движки автоматически: `PP_GHOSTSCRIPT` → PATH (`gswin64c/gswin32c/gs`) →
+  каталоги `C:\Program Files\gs`, `C:\Program Files (x86)\gs` и
+  `cam_pipeline\ghostscript_engine` (по `<версия>/bin/gswin*`). `PP_INKSCAPE` без env
+  фолбэчится на `cam_pipeline\inkscape_engine\bin\inkscape.exe` репозитория.
+- EPS-каскад: Ghostscript → PDF (`-dSAFER -sDEVICE=pdfwrite`) → при target=svg ещё
+  Inkscape из PDF. Проверено вручную по HTTP: EPS → done → svg (на Ghostscript 8.64,
+  `C:\Program Files (x86)\gs`). Ошибка «Ghostscript не найден» — с подсказкой по
+  установке/env.
+- ВАЖНО истории: Ghostscript «не стартует 0xC0000142» — про старую машину; на текущей
+  GS 8.64 запускается, тесты реального EPS-прогона добавить в pytest (сейчас покрыт
+  только флаг gs_available).
