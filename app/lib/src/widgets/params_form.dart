@@ -1,4 +1,9 @@
 /// Форма параметров раскроя (LayoutParams).
+///
+/// Подпись каждого параметра вынесена над полем ввода и обрезается по ширине
+/// колонки (TextOverflow.ellipsis), поэтому длинные подписи больше не
+/// «вылезают» за границу своего поля на соседние. При наведении курсора на
+/// параметр всплывает комментарий (Tooltip), поясняющий его смысл и формулу.
 library;
 
 import 'package:flutter/material.dart';
@@ -58,73 +63,128 @@ class _ParamsFormState extends State<ParamsForm> {
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Wrap(
-            spacing: 12,
-            runSpacing: 8,
-            children: [
-              _field('Этикетка W, мм', 'labelW'),
-              _field('Этикетка H, мм', 'labelH'),
-              _field('Зазор X, мм', 'gapX'),
-              _field('Зазор Y, мм', 'gapY'),
-            ],
-          ),
-          Wrap(
-            spacing: 12,
-            runSpacing: 8,
-            children: [
-              _field('Зубья Z', 'zTeeth', width: 90),
-              _field('Шаг CP, мм', 'cp'),
-              _field('Цилиндр, мм', 'cylWidth'),
-              _field('Полотно, мм', 'webWidth'),
-            ],
-          ),
-          Wrap(
-            spacing: 12,
-            runSpacing: 8,
-            children: [
-              _field('Подрез, мм', 'undercut'),
-              _field('Мин. зазор, мм', 'minGap'),
-              _field('Кол-во N', 'count', width: 110),
-              _field('Длина L, мм', 'length', width: 110),
-            ],
-          ),
-          Row(
-            children: [
-              const Text('Режим: '),
-              SegmentedButton<String>(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          children: [
+            _param('Этикетка W, мм', 'labelW',
+                'Ширина этикетки поперёк полотна, мм. Обычно берётся из файла '
+                    'геометрии либо из задания.'),
+            _param('Этикетка H, мм', 'labelH',
+                'Высота этикетки вдоль движения полотна, мм.'),
+            _param('Зазор X, мм', 'gapX',
+                'Боковой зазор между колонками этикеток, мм. '
+                    'Шаг колонки = W + зазор X.'),
+            _param('Зазор Y, мм', 'gapY',
+                'Желаемый продольный зазор между рядами, мм. Фактический шаг '
+                    'ряда = раппорт ÷ число рядов, чтобы шов на цилиндре '
+                    'сходился.'),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          children: [
+            _param('Зубья Z', 'zTeeth',
+                'Число зубьев шестерни печатного цилиндра. Раппорт = Z × CP '
+                    '(например, 96 × 3,175 = 304,8 мм).', width: 100),
+            _param('Шаг CP, мм', 'cp',
+                'Шаг зубьев шестерни, мм. Флексопечатный стандарт 1/8″ = '
+                    '3,175 мм.'),
+            _param('Цилиндр, мм', 'cylWidth',
+                'Рабочая ширина печатного цилиндра, мм. Число колонок '
+                    'ограничено min(цилиндр, полотно).'),
+            _param('Полотно, мм', 'webWidth',
+                'Ширина плёнки/полотна материала, мм. Задаёт площадь расхода '
+                    'и процент отходов.'),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          children: [
+            _param('Подрез, мм', 'undercut',
+                'Подрез цилиндра, мм: диаметр тела dCyl = делительный диаметр '
+                    '− 2 × подрез (создаёт натяжение полотна).'),
+            _param('Мин. зазор, мм', 'minGap',
+                'Минимально допустимый зазор между этикетками, мм. '
+                    'Используется при подборе рядов (сходимость шва).'),
+            _param('Кол-во N', 'count',
+                'Тираж в штуках (режим «по количеству»). Расчёт округляет N '
+                    'до целого числа оборотов цилиндра.'),
+            _param('Длина L, мм', 'length',
+                'Длина полотна в мм (режим «по длине»). Число этикеток = '
+                    'целые обороты × этикеток за оборот.'),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 16,
+          runSpacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            const Text('Режим расчёта:'),
+            Tooltip(
+              message: 'Как задан тираж: числом этикеток N или длиной '
+                  'полотна L.',
+              child: SegmentedButton<String>(
                 segments: const [
-                  ButtonSegment(
-                      value: 'count', label: Text('по количеству')),
+                  ButtonSegment(value: 'count', label: Text('по количеству')),
                   ButtonSegment(value: 'length', label: Text('по длине')),
                 ],
                 selected: {mode},
                 onSelectionChanged: (s) => setState(() => mode = s.first),
               ),
-              const Spacer(),
-              FilledButton(
+            ),
+            Tooltip(
+              message: 'Выполнить расчёт расхода материала по текущим '
+                  'параметрам.',
+              child: FilledButton(
                   onPressed: () => widget.onChanged(params),
                   child: const Text('Рассчитать')),
-            ],
-          ),
-        ],
-      ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 
-  Widget _field(String label, String key, {double width = 100}) {
-    return SizedBox(
-      width: width,
-      child: TextField(
-        controller: controllers[key],
-        decoration: InputDecoration(
-            labelText: label,
-            isDense: true,
-            border: const OutlineInputBorder()),
-        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+  /// Параметр раскроя: подпись над полем + всплывающий комментарий.
+  Widget _param(String label, String key, String help, {double width = 128}) {
+    return Tooltip(
+      message: '$label — $help',
+      waitDuration: const Duration(milliseconds: 350),
+      child: SizedBox(
+        width: width,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 4),
+            TextField(
+              controller: controllers[key],
+              decoration: const InputDecoration(
+                isDense: true,
+                contentPadding:
+                    EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                border: OutlineInputBorder(),
+              ),
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+            ),
+          ],
+        ),
       ),
     );
   }

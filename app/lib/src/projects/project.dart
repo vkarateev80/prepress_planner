@@ -106,19 +106,7 @@ class Project {
         'rawPaths': [for (final p in rawPaths) camPathToJson(p)],
         'healedPaths': [for (final p in healedPaths) camPathToJson(p)],
         'issues': [for (final i in issues) issueToJson(i)],
-        'pattern': pattern == null
-            ? null
-            : {
-                'isArray': pattern!.isArray,
-                'rows': pattern!.rows,
-                'cols': pattern!.cols,
-                'stepX': pattern!.stepX,
-                'stepY': pattern!.stepY,
-                'count': pattern!.count,
-                'labelW': pattern!.labelW,
-                'labelH': pattern!.labelH,
-                'masterArea': pattern!.masterArea,
-              },
+        'pattern': pattern == null ? null : patternResultToJson(pattern!),
         'arrayPaths': [for (final p in arrayPaths) camPathToJson(p)],
         'calc': calc == null ? null : materialResultToJson(calc!),
         'variants': [for (final v in variants) materialResultToJson(v)],
@@ -152,6 +140,8 @@ class Project {
         for (final e in (j['issues'] as List? ?? const []))
           issueFromJson((e as Map).cast<String, dynamic>())
       ],
+      pattern: patternResultFromJson(
+          (j['pattern'] as Map?)?.cast<String, dynamic>()),
       arrayPaths: [
         for (final e in (j['arrayPaths'] as List? ?? const []))
           camPathFromJson((e as Map).cast<String, dynamic>())
@@ -190,6 +180,51 @@ Issue issueFromJson(Map<String, dynamic> j) => Issue(
       fixable: j['fixable'] == true,
       index: (j['index'] as num?)?.toInt() ?? 0,
     );
+
+Map<String, dynamic> patternResultToJson(PatternResult p) => {
+      'isArray': p.isArray,
+      // Мастер-элемент и закон расположения сохраняются полностью, чтобы
+      // после перезапуска можно было перегенерировать массив без повторного
+      // распознавания.
+      'masterPaths': [for (final q in p.masterPaths) camPathToJson(q)],
+      'offsets': [for (final o in p.offsets) [o.x, o.y]],
+      'rows': p.rows,
+      'cols': p.cols,
+      'stepX': p.stepX,
+      'stepY': p.stepY,
+      'gapX': p.gapX,
+      'gapY': p.gapY,
+      'count': p.count,
+      'labelW': p.labelW,
+      'labelH': p.labelH,
+      'masterArea': p.masterArea,
+    };
+
+PatternResult? patternResultFromJson(Map<String, dynamic>? j) {
+  if (j == null) return null;
+  return PatternResult(
+    isArray: j['isArray'] == true,
+    masterPaths: [
+      for (final e in (j['masterPaths'] as List? ?? const []))
+        camPathFromJson((e as Map).cast<String, dynamic>())
+    ],
+    offsets: [
+      for (final e in (j['offsets'] as List? ?? const []))
+        Vec2(((e as List)[0] as num).toDouble(),
+            ((e)[1] as num).toDouble())
+    ],
+    rows: (j['rows'] as num?)?.toInt() ?? 0,
+    cols: (j['cols'] as num?)?.toInt() ?? 0,
+    stepX: (j['stepX'] as num?)?.toDouble() ?? 0,
+    stepY: (j['stepY'] as num?)?.toDouble() ?? 0,
+    gapX: (j['gapX'] as num?)?.toDouble() ?? 0,
+    gapY: (j['gapY'] as num?)?.toDouble() ?? 0,
+    count: (j['count'] as num?)?.toInt() ?? 0,
+    labelW: (j['labelW'] as num?)?.toDouble() ?? 0,
+    labelH: (j['labelH'] as num?)?.toDouble() ?? 0,
+    masterArea: (j['masterArea'] as num?)?.toDouble() ?? 0,
+  );
+}
 
 Map<String, dynamic> materialResultToJson(MaterialResult r) => {
       'error': r.error,

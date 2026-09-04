@@ -5,7 +5,9 @@ import 'package:flutter/material.dart';
 
 import '../../license/license_controller.dart';
 import '../../license/paywall_screen.dart';
+import '../logs/app_log.dart';
 import '../projects/project.dart';
+import '../widgets/log_window.dart';
 import 'geometry_screen.dart';
 import 'layout_screen.dart';
 import 'projects_screen.dart';
@@ -109,6 +111,23 @@ class _HomeShellState extends State<HomeShell> {
             ? 'Препресс-Планер'
             : '${project!.name} — Препресс-Планер'),
         actions: [
+          // Журнал событий — доступен с любой вкладки; бейдж показывает
+          // число ошибок (уровень E) с момента последней очистки.
+          ListenableBuilder(
+            listenable: AppLog.instance,
+            builder: (context, _) {
+              final errors = AppLog.instance.errorCount;
+              return IconButton(
+                tooltip: 'Журнал событий (ошибки можно копировать)',
+                icon: Badge(
+                  isLabelVisible: errors > 0,
+                  label: Text('$errors'),
+                  child: const Icon(Icons.receipt_long_outlined),
+                ),
+                onPressed: () => showLogWindow(context),
+              );
+            },
+          ),
           if (widget.license != null) ...[
             Padding(
               padding: const EdgeInsets.only(right: 8),

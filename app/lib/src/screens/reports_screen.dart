@@ -6,7 +6,63 @@ import 'dart:isolate';
 import 'package:flutter/material.dart';
 import 'package:prepress_core/prepress_core.dart';
 
+import '../logs/app_log.dart';
 import '../projects/project.dart';
+
+/// Экспорт отчётов в изоляте через топ-левел функции: замыкание создаётся в
+/// своей активации и не захватывает состояние экрана (иначе VM делит контекст
+/// с setState-замыканием, отправка падает как unsendable).
+
+TeoReportData _buildReportData(Project project) {
+  final calc = project.calc!;
+  final shape = shapeFromPreset('rect', calc.labelW, calc.labelH);
+  final cons = computeConsumption(calc, shape);
+  final catalog = PriceCatalog.defaults();
+  final machine = catalog.machines.first;
+  final input =
+      TeoInput(material: catalog.assortment.first, machine: machine);
+  final teo = computeTeo(calc, cons, input);
+  final comparison = compareTeoVariants(
+      project.variants.isNotEmpty ? project.variants : [calc],
+      (v) => computeConsumption(
+          v, shapeFromPreset('rect', v.labelW, v.labelH)),
+      input);
+  return TeoReportData(
+    projectName: project.name,
+    inputFile: project.inputFile,
+    params: project.params,
+    shape: shape,
+    calc: calc,
+    consumption: cons,
+    teo: teo,
+    comparison: comparison,
+    material: catalog.assortment.first,
+    machine: machine,
+    workTime: catalog.workTime,
+    currency: catalog.currency,
+    date: DateTime.now(),
+  );
+}
+
+Future<void> _isolateWritePdf(Project project, String outDir) =>
+    Isolate.run(() {
+      final data = _buildReportData(project);
+      writeTeoReportPdf('$outDir/04_ТЭО_Отчёт.pdf', data);
+    });
+
+Future<void> _isolateWriteXlsx(Project project, String outDir) =>
+    Isolate.run(() {
+      final data = _buildReportData(project);
+      writeTeoXlsx('$outDir/05_Расчёт.xlsx', data);
+    });
+
+Future<void> _isolateWriteDxf(Project project, String outDir) =>
+    Isolate.run(() {
+      writeDxf('$outDir/02_Вылеченный_Мастер.dxf', project.healedPaths);
+      if (project.arrayPaths.isNotEmpty) {
+        writeDxf('$outDir/03_Раскрой.dxf', project.arrayPaths);
+      }
+    });
 
 class ReportsScreen extends StatefulWidget {
   final Project? project;
@@ -23,6 +79,10 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   String get _outDir =>
       widget.store.directory.isEmpty ? '.' : widget.store.directory;
+
+  /// Запись в журнал приложения (окно «Журнал событий» в шапке).
+  void _log(String message, {LogLevel level = LogLevel.info}) =>
+      AppLog.instance.record('Отчёты', message, level: level);
 
   @override
   Widget build(BuildContext context) {
@@ -73,13 +133,14 @@ class _ReportsScreenState extends State<ReportsScreen> {
       _status = 'Формирование PDF…';
     });
     try {
-      await Isolate.run(() {
-        final data = _buildReportData(project);
-        writeTeoReportPdf('$_outDir/04_ТЭО_Отчёт.pdf', data);
-      });
-      setState(() => _status = 'PDF сохранён: $_outDir/04_ТЭО_Отчёт.pdf');
+      await _isolateWritePdf(project, _outDir);
+      if (mounted) {
+        setState(() => _status = 'PDF сохранён: $_outDir/04_ТЭО_Отчёт.pdf');
+      }
+      _log('PDF сохранён: $_outDir/04_ТЭО_Отчёт.pdf');
     } catch (e) {
-      setState(() => _status = 'Ошибка PDF: $e');
+      if (mounted) setState(() => _status = 'Ошибка PDF: $e');
+      _log('Ошибка PDF: $e', level: LogLevel.error);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -92,13 +153,14 @@ class _ReportsScreenState extends State<ReportsScreen> {
       _status = 'Формирование XLSX…';
     });
     try {
-      await Isolate.run(() {
-        final data = _buildReportData(project);
-        writeTeoXlsx('$_outDir/05_Расчёт.xlsx', data);
-      });
-      setState(() => _status = 'XLSX сохранён: $_outDir/05_Расчёт.xlsx');
+      await _isolateWriteXlsx(project, _outDir);
+      if (mounted) {
+        setState(() => _status = 'XLSX сохранён: $_outDir/05_Расчёт.xlsx');
+      }
+      _log('XLSX сохранён: $_outDir/05_Расчёт.xlsx');
     } catch (e) {
-      setState(() => _status = 'Ошибка XLSX: $e');
+      if (mounted) setState(() => _status = 'Ошибка XLSX: $e');
+      _log('Ошибка XLSX: $e', level: LogLevel.error);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -111,47 +173,16 @@ class _ReportsScreenState extends State<ReportsScreen> {
       _status = 'Формирование DXF…';
     });
     try {
-      await Isolate.run(() {
-        writeDxf('$_outDir/02_Вылеченный_Мастер.dxf', project.healedPaths);
-        if (project.arrayPaths.isNotEmpty) {
-          writeDxf('$_outDir/03_Раскрой.dxf', project.arrayPaths);
-        }
-      });
-      setState(() => _status = 'DXF сохранены в $_outDir');
+      await _isolateWriteDxf(project, _outDir);
+      if (mounted) {
+        setState(() => _status = 'DXF сохранены в $_outDir');
+      }
+      _log('DXF сохранены в $_outDir');
     } catch (e) {
-      setState(() => _status = 'Ошибка DXF: $e');
+      if (mounted) setState(() => _status = 'Ошибка DXF: $e');
+      _log('Ошибка DXF: $e', level: LogLevel.error);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
-  }
-
-  TeoReportData _buildReportData(Project project) {
-    final calc = project.calc!;
-    final shape = shapeFromPreset('rect', calc.labelW, calc.labelH);
-    final cons = computeConsumption(calc, shape);
-    final catalog = PriceCatalog.defaults();
-    final machine = catalog.machines.first;
-    final input = TeoInput(material: catalog.assortment.first, machine: machine);
-    final teo = computeTeo(calc, cons, input);
-    final comparison = compareTeoVariants(
-        project.variants.isNotEmpty ? project.variants : [calc],
-        (v) => computeConsumption(
-            v, shapeFromPreset('rect', v.labelW, v.labelH)),
-        input);
-    return TeoReportData(
-      projectName: project.name,
-      inputFile: project.inputFile,
-      params: project.params,
-      shape: shape,
-      calc: calc,
-      consumption: cons,
-      teo: teo,
-      comparison: comparison,
-      material: catalog.assortment.first,
-      machine: machine,
-      workTime: catalog.workTime,
-      currency: catalog.currency,
-      date: DateTime.now(),
-    );
   }
 }

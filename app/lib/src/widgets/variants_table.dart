@@ -30,9 +30,9 @@ class VariantsTable extends StatelessWidget {
           DataColumn(label: Text('Сетка')),
           DataColumn(label: Text('Пов.')),
           DataColumn(label: Text('N')),
-          DataColumn(label: Text('Длина, мм')),
+          DataColumn(label: Text('Длина, м')),
           DataColumn(label: Text('Отходы, %')),
-          DataColumn(label: Text('На этикетку, мм²')),
+          DataColumn(label: Text('На этикетку, м²')),
         ],
         rows: [
           for (var i = 0; i < variants.length && i < 50; i++)
@@ -44,9 +44,10 @@ class VariantsTable extends StatelessWidget {
                 DataCell(Text('${variants[i].rows}×${variants[i].cols}')),
                 DataCell(Text(variants[i].rotated ? 'да' : '—')),
                 DataCell(Text('${variants[i].count}')),
-                DataCell(Text(variants[i].length.toStringAsFixed(1))),
+                DataCell(Text((variants[i].length / 1000).toStringAsFixed(3))),
                 DataCell(Text(variants[i].wastePct.toStringAsFixed(2))),
-                DataCell(Text(variants[i].perLabelArea.toStringAsFixed(1))),
+                DataCell(
+                    Text((variants[i].perLabelArea / 1e6).toStringAsFixed(6))),
               ],
             ),
         ],

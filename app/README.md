@@ -11,9 +11,21 @@
   чип статуса подписки в шапке; гейтинг Pro-вкладок.
 - `lib/src/projects/project.dart` — `Project` + `ProjectStore` (JSON v2 на диске).
 - `lib/src/screens/*` — экраны; `lib/src/widgets/*` — форма раскроя, таблица вариантов, canvas.
+- `lib/src/converter/` — HTTP-клиент к сервису конвертации (`ConverterApi`, dart:io, без
+  внешних пакетов): импорт закрытых форматов AI/CDR/EPS → SVG. Адрес по умолчанию
+  `http://127.0.0.1:8120`, переопределяется env `PP_CONVERTER_URL` или кнопкой
+  в UI экрана «Геометрия».
 - `lib/license/` — клиент лицензий: `LicenseClient` (HTTP/офлайн-заглушка), `EntitlementStore`
   (кэш + грэйс 30 дн.), `FeatureGate` (Free/Pro, триал), `TrialTimer`, `LicenseController`
   (ChangeNotifier), `PaywallScreen` + хелперы `openPaywall`/`showProSheet`.
+
+## Импорт файлов
+
+- DXF/SVG/PDF и PDF-совместимый AI разбираются локально доменом (поле пути на вкладке
+  «Геометрия»).
+- AI/CDR/EPS уходят на сервер конвертации (`services/converter`, см. `services/converter/README.md`):
+  multipart-загрузка → SVG → разбор доменом. Если сервер недоступен, PDF-совместимый AI
+  разбирается локально как запасной путь.
 
 ## Лимиты и гейтинг
 
@@ -27,7 +39,8 @@
 ```bash
 flutter pub get      # подтягивает prepress_core по path
 flutter analyze      # 0 проблем
-flutter test         # 15 тестов: widget_test (5), license_test (5), license_ui_test (5)
+flutter test         # 21 тест: widget_test (5), license_test (5), license_ui_test (5),
+                     #          converter_api_test (5), import_flow_test (1)
 ```
 
 Данные приложения (проекты, состояние лицензии) хранятся в рабочих каталогах

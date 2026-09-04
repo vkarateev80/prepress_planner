@@ -108,13 +108,21 @@ class _CanvasPainter extends CustomPainter {
     Offset toScreen(Vec2 p) =>
         Offset(offset.dx + p.x * scale, offset.dy + p.y * scale);
 
-    final pathPaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.5
-      ..color = const Color(0xFF37474F);
-
+    // Цвет по «слою» пути: мастер-элемент — бирюзовый, копии массива —
+    // индиго, вылеченные контуры — тёмные, исходные — светло-серые.
     for (final p in paths) {
       if (p.points.length < 2) continue;
+      final l = p.layerName;
+      final pathPaint = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = l == 'MASTER' ? 2.2 : 1.5
+        ..color = l == 'MASTER'
+            ? const Color(0xFF00695C)
+            : (l.contains('ARRAY')
+                ? const Color(0xFF5C6BC0)
+                : (l.startsWith('HEALED_')
+                    ? const Color(0xFF37474F)
+                    : const Color(0xFF90A4AE)));
       final path = Path();
       final first = toScreen(p.points.first);
       path.moveTo(first.dx, first.dy);

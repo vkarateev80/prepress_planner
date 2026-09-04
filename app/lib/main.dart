@@ -3,10 +3,16 @@ import 'package:flutter/material.dart';
 import 'license/entitlement_store.dart';
 import 'license/license_client.dart';
 import 'license/license_controller.dart';
+import 'src/logs/app_log.dart';
 import 'src/projects/project.dart';
 import 'src/screens/home_shell.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Необработанные ошибки Flutter/Dart пишутся в журнал приложения —
+  // их можно посмотреть и скопировать в окне «Журнал событий».
+  AppLog.instance.installGlobalHandlers();
+  AppLog.instance.info('App', 'Препресс-Планер запущен.');
   runApp(const PrepressPlannerApp());
 }
 
