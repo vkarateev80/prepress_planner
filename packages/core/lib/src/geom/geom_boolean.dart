@@ -171,18 +171,15 @@ List<_Arc> _nodeSegments(List<List<Vec2>> segs) {
     bye[s] = p.y < q.y ? q.y : p.y;
   }
   final result = <List<Vec2>>[];
+  // Кандидаты по bbox-сетке вместо полного перебора (см. _bboxOverlapNeighbors).
+  final neighbors = _bboxOverlapNeighbors(bxs, bys, bxe, bye);
   for (var i = 0; i < nSegs; i++) {
     final a1 = segs[i][0], a2 = segs[i][1];
     final cuts = <double>[
       0.0,
       1.0
     ];
-    for (var j = 0; j < nSegs; j++) {
-      if (i == j) continue;
-      if (bxe[i] < bxs[j] - 1e-9 || bxe[j] < bxs[i] - 1e-9 ||
-          bye[i] < bys[j] - 1e-9 || bye[j] < bys[i] - 1e-9) {
-        continue; // bbox не пересекаются — пересечение невозможно
-      }
+    for (final j in neighbors[i]) {
       final b1 = segs[j][0], b2 = segs[j][1];
       final inter = segmentIntersections(a1, a2, b1, b2);
       for (final x in inter) {
@@ -288,18 +285,15 @@ List<List<Vec2>> nodeLineSegments(List<List<Vec2>> lines) {
     bye[s] = p.y < q.y ? q.y : p.y;
   }
   final result = <List<Vec2>>[];
+  // Кандидаты по bbox-сетке вместо полного перебора.
+  final neighbors = _bboxOverlapNeighbors(bxs, bys, bxe, bye);
   for (var i = 0; i < nSegs; i++) {
     final a1 = segs[i][0], a2 = segs[i][1];
     final cuts = <double>[
       0.0,
       1.0
     ];
-    for (var j = 0; j < nSegs; j++) {
-      if (i == j) continue;
-      if (bxe[i] < bxs[j] - 1e-9 || bxe[j] < bxs[i] - 1e-9 ||
-          bye[i] < bys[j] - 1e-9 || bye[j] < bys[i] - 1e-9) {
-        continue;
-      }
+    for (final j in neighbors[i]) {
       final b1 = segs[j][0], b2 = segs[j][1];
       final inter = segmentIntersections(a1, a2, b1, b2);
       for (final x in inter) {
@@ -332,6 +326,98 @@ List<List<Vec2>> nodeLineSegments(List<List<Vec2>> lines) {
     seen.add(k1);
     seen.add(k2);
     out.add(e);
+  }
+  return out;
+}
+
+// ============================================================
+// Пространственный индекс по bbox (ускорение нодинга)
+// ============================================================
+
+/// Соседи по сетке: для каждого отрезка i — список j, чей bbox-прямоугольник
+/// пересекается с bbox i (возможные кандидаты на пересечение сегментов).
+///
+/// РЕЗУЛЬТАТ ПОБИТОВО ТОТ ЖЕ, что у полного перебора: если bbox-ы не
+/// пересекаются, отрезки точно не пересекаются; каждый отрезок добавляется
+/// во ВСЕ ячейки, которые покрывает его bbox, поэтому любая пара с
+/// пересекающимися bbox-ами обязательно попадёт в общую ячейку. Сетка лишь
+/// исключает заведомо пустые пары — численно ничего не меняется.
+List<List<int>> _bboxOverlapNeighbors(
+    List<double> bxs, List<double> bys, List<double> bxe, List<double> bye) {
+  final n = bxs.length;
+  final out = List.generate(n, (_) => <int>[]);
+  if (n < 2) return out;
+
+  var minX = bxs[0], maxX = bxe[0];
+  var minY = bys[0], maxY = bye[0];
+  for (var i = 1; i < n; i++) {
+    if (bxs[i] < minX) minX = bxs[i];
+    if (bxe[i] > maxX) maxX = bxe[i];
+    if (bys[i] < minY) minY = bys[i];
+    if (bye[i] > maxY) maxY = bye[i];
+  }
+  final spanX = maxX - minX;
+  final spanY = maxY - minY;
+
+  // Размер ячейки: страница/чертёж делится на ~256 по длинной стороне.
+  // Длинные сегменты перечисляются по всем покрытым ячейкам — это плата
+  // за точность; короткие (обычный случай) занимают 1–4 ячейки.
+  const targetCells = 256.0;
+  var cell = math.max(spanX, spanY) / targetCells;
+  if (cell < 1e-4) cell = 1e-4; // защита от вырожденного охвата
+  var nx = math.max(1, (spanX / cell).ceil());
+  var ny = math.max(1, (spanY / cell).ceil());
+  // Предел сетки: при патологическом разбросе укрупняем ячейку, чтобы не
+  // плодить миллионы пустых ячеек.
+  const maxAxis = 2048;
+  if (nx > maxAxis || ny > maxAxis) {
+    final k = math.max(nx, ny) / maxAxis;
+    cell *= k;
+    nx = math.max(1, (spanX / cell).ceil());
+    ny = math.max(1, (spanY / cell).ceil());
+  }
+
+  final buckets = <int, List<int>>{};
+  void addCell(int cx, int cy, int seg) {
+    final key = cy * nx + cx;
+    (buckets[key] ??= <int>[]).add(seg);
+  }
+
+  for (var i = 0; i < n; i++) {
+    final x0 = (((bxs[i] - minX) / cell).floor()).clamp(0, nx - 1);
+    final x1 = (((bxe[i] - minX) / cell).floor()).clamp(0, nx - 1);
+    final y0 = (((bys[i] - minY) / cell).floor()).clamp(0, ny - 1);
+    final y1 = (((bye[i] - minY) / cell).floor()).clamp(0, ny - 1);
+    for (var cy = y0; cy <= y1; cy++) {
+      for (var cx = x0; cx <= x1; cx++) {
+        addCell(cx, cy, i);
+      }
+    }
+  }
+
+  final seen = <int>{};
+  for (final segs in buckets.values) {
+    final k = segs.length;
+    for (var a = 0; a < k; a++) {
+      final i = segs[a];
+      for (var b = a + 1; b < k; b++) {
+        final j = segs[b];
+        // Точная проверка перекрытия bbox (ячейка может быть крупнее bbox).
+        if (bxe[i] < bxs[j] - 1e-9 ||
+            bxe[j] < bxs[i] - 1e-9 ||
+            bye[i] < bys[j] - 1e-9 ||
+            bye[j] < bys[i] - 1e-9) {
+          continue;
+        }
+        // Симметрично: каждый из пары должен резаться другим (нодинг
+        // обрабатывает список соседей только своего сегмента).
+        final key = i < j ? i * n + j : j * n + i;
+        if (seen.add(key)) {
+          out[i].add(j);
+          out[j].add(i);
+        }
+      }
+    }
   }
   return out;
 }

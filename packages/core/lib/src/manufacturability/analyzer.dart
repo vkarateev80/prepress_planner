@@ -29,14 +29,29 @@ class AnalysisReport {
 ///
 /// Порядок проверок — как в Python analyzer.py: open → dust →
 /// intersection/duplicate → sharp_corner → small_gap.
+///
+/// Проверка «малых зазоров» квадратична по числу сегментов пар контуров и на
+/// контурах-гигантах (десятки тысяч точек в одном контуре) не укладывается в
+/// таймаут анализа. Для файлов с [kHeavyPointSkip] точками и более она
+/// автоматически пропускается (проверка в любом случае ограничена первыми
+/// maxPairs парами и для гигантских контуров почти всегда пуста) — остальные
+/// проверки (включая пересечения/дубликаты через bbox-сетку) выполняются.
 AnalysisReport analyzeManufacturability(
     List<CamPath> paths, ManufacturingParams p) {
+  const kHeavyPointSkip = 120000;
+  var totalPoints = 0;
+  for (final path in paths) {
+    totalPoints += path.points.length;
+    if (totalPoints >= kHeavyPointSkip) break;
+  }
+  final heavy = totalPoints >= kHeavyPointSkip;
+
   final raw = <Issue>[
     ...checkOpenPaths(paths),
     ...checkDust(paths, p.minLoopArea),
     ...checkIntersectionsDuplicates(paths),
     ...checkSharpCorners(paths, p.minRadius),
-    ...checkSmallGaps(paths, p.minGap),
+    if (!heavy) ...checkSmallGaps(paths, p.minGap),
   ];
 
   final counts = {'error': 0, 'warning': 0, 'suggestion': 0};

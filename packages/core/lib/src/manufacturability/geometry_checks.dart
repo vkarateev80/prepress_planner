@@ -83,38 +83,6 @@ Vec2 _round3(Vec2 v) =>
   return (pts: [a1 + r * t], overlap: 0);
 }
 
-bool _bboxHit(Vec2 a1, Vec2 a2, Vec2 b1, Vec2 b2) {
-  final ax0 = a1.x < a2.x ? a1.x : a2.x;
-  final ax1 = a1.x < a2.x ? a2.x : a1.x;
-  final ay0 = a1.y < a2.y ? a1.y : a2.y;
-  final ay1 = a1.y < a2.y ? a2.y : a1.y;
-  final bx0 = b1.x < b2.x ? b1.x : b2.x;
-  final bx1 = b1.x < b2.x ? b2.x : b1.x;
-  final by0 = b1.y < b2.y ? b1.y : b2.y;
-  final by1 = b1.y < b2.y ? b2.y : b1.y;
-  return ax0 <= bx1 && bx0 <= ax1 && ay0 <= by1 && by0 <= ay1;
-}
-
-/// Проста ли ломаная (аналог Shapely LineString.is_simple): нет пересечений
-/// не-смежных сегментов, кроме общей точки замыкания кольца.
-bool _isSimple(List<Vec2> pts, bool isClosed) {
-  final n = pts.length;
-  if (n < 4) return true; // меньше двух сегментов — пересекаться нечему
-  for (var k = 0; k < n - 1; k++) {
-    final a1 = pts[k], a2 = pts[k + 1];
-    if ((a1 - a2).length < 1e-12) continue; // вырожденный сегмент
-    for (var m = k + 2; m < n - 1; m++) {
-      if (isClosed && k == 0 && m == n - 2) continue; // пара замыкания кольца
-      final b1 = pts[m], b2 = pts[m + 1];
-      if ((b1 - b2).length < 1e-12) continue;
-      if (!_bboxHit(a1, a2, b1, b2)) continue;
-      final res = _segPair(a1, a2, b1, b2);
-      if (res.pts.isNotEmpty) return false;
-    }
-  }
-  return true;
-}
-
 // ============================================================
 // Пыль (мелкие контуры/штрихи)
 // ============================================================
@@ -183,6 +151,92 @@ List<Issue> checkOpenPaths(List<CamPath> paths) {
 // Пересечения и дубликаты сегментов
 // ============================================================
 
+/// Соседи по сетке: для каждого сегмента i — список j, чей bbox пересекается
+/// с bbox i (кандидаты на пересечение). Результат ПОБИТОВО тот же, что у
+/// полного перебора: не пересекающиеся по bbox сегменты точно не имеют общих
+/// точек; каждый сегмент добавлен во все ячейки своего bbox, поэтому любая
+/// пара с пересекающимися bbox обязательно попадёт в общую ячейку. Сетка лишь
+/// убирает заведомо пустые пары — это ускоряет проверки на контурах с
+/// десятками тысяч точек (иначе O(N²) не укладывается в таймаут анализа).
+List<List<int>> _overlapNeighbors(List<List<Vec2>> segs) {
+  final n = segs.length;
+  final out = List.generate(n, (_) => <int>[]);
+  if (n < 2) return out;
+
+  final bxs = List<double>.filled(n, 0);
+  final bys = List<double>.filled(n, 0);
+  final bxe = List<double>.filled(n, 0);
+  final bye = List<double>.filled(n, 0);
+  var minX = double.infinity, maxX = double.negativeInfinity;
+  var minY = double.infinity, maxY = double.negativeInfinity;
+  for (var i = 0; i < n; i++) {
+    final a = segs[i][0], b = segs[i][1];
+    final x0 = a.x < b.x ? a.x : b.x;
+    final x1 = a.x < b.x ? b.x : a.x;
+    final y0 = a.y < b.y ? a.y : b.y;
+    final y1 = a.y < b.y ? b.y : a.y;
+    bxs[i] = x0;
+    bys[i] = y0;
+    bxe[i] = x1;
+    bye[i] = y1;
+    if (x0 < minX) minX = x0;
+    if (x1 > maxX) maxX = x1;
+    if (y0 < minY) minY = y0;
+    if (y1 > maxY) maxY = y1;
+  }
+  final spanX = maxX - minX;
+  final spanY = maxY - minY;
+  const targetCells = 256.0;
+  var cell = math.max(spanX, spanY) / targetCells;
+  if (cell < 1e-4) cell = 1e-4;
+  var nx = math.max(1, (spanX / cell).ceil());
+  var ny = math.max(1, (spanY / cell).ceil());
+  const maxAxis = 2048;
+  if (nx > maxAxis || ny > maxAxis) {
+    final k = math.max(nx, ny) / maxAxis;
+    cell *= k;
+    nx = math.max(1, (spanX / cell).ceil());
+    ny = math.max(1, (spanY / cell).ceil());
+  }
+
+  final buckets = <int, List<int>>{};
+  for (var i = 0; i < n; i++) {
+    final cx0 = (((bxs[i] - minX) / cell).floor()).clamp(0, nx - 1);
+    final cx1 = (((bxe[i] - minX) / cell).floor()).clamp(0, nx - 1);
+    final cy0 = (((bys[i] - minY) / cell).floor()).clamp(0, ny - 1);
+    final cy1 = (((bye[i] - minY) / cell).floor()).clamp(0, ny - 1);
+    for (var cy = cy0; cy <= cy1; cy++) {
+      for (var cx = cx0; cx <= cx1; cx++) {
+        final key = cy * nx + cx;
+        (buckets[key] ??= <int>[]).add(i);
+      }
+    }
+  }
+
+  final seen = <int>{};
+  for (final list in buckets.values) {
+    final k = list.length;
+    for (var p = 0; p < k; p++) {
+      final i = list[p];
+      for (var q = p + 1; q < k; q++) {
+        final j = list[q];
+        if (bxe[i] < bxs[j] - 1e-9 ||
+            bxe[j] < bxs[i] - 1e-9 ||
+            bye[i] < bys[j] - 1e-9 ||
+            bye[j] < bys[i] - 1e-9) {
+          continue;
+        }
+        final key = i < j ? i * n + j : j * n + i;
+        if (seen.add(key)) {
+          out[i].add(j);
+          out[j].add(i);
+        }
+      }
+    }
+  }
+  return out;
+}
+
 List<Issue> checkIntersectionsDuplicates(List<CamPath> paths) {
   final issues = <Issue>[];
   final polys = <({int idx, List<Vec2> pts})>[];
@@ -190,76 +244,111 @@ List<Issue> checkIntersectionsDuplicates(List<CamPath> paths) {
     if (paths[i].points.length < 2) continue;
     polys.add((idx: i, pts: paths[i].points));
   }
+  if (polys.isEmpty) return issues;
+  final P = polys.length;
+
+  // Глобальный индекс всех сегментов по bbox-сетке (см. _overlapNeighbors):
+  // проверяются только пары с пересекающимися bbox — результаты те же, что
+  // у полного перебора, но на контурах-гигантах (десятки тысяч точек) время
+  // падает с квадратичного до почти линейного.
+  final segs = <List<Vec2>>[];
+  final segPath = <int>[];
+  final segLocal = <int>[];
+  for (var a = 0; a < P; a++) {
+    final pts = polys[a].pts;
+    for (var k = 0; k + 1 < pts.length; k++) {
+      segs.add([pts[k], pts[k + 1]]);
+      segPath.add(a);
+      segLocal.add(k);
+    }
+  }
+  final neighbors = _overlapNeighbors(segs);
 
   // 1. Самопересечения внутри одного контура.
-  for (final c in polys) {
-    final pts = c.pts;
-    final closedGeom = (pts.first - pts.last).length < 1e-4;
-    // Как в Python: сегменты строятся по точкам как сохранены; флаг
-    // геометрической замкнутости влияет только на пропуск пары замыкания.
-    if (!_isSimple(pts, closedGeom)) {
-      for (var k = 0; k < pts.length - 1; k++) {
-        final a1 = pts[k], a2 = pts[k + 1];
-        if ((a1 - a2).length < 1e-12) continue;
-        for (var m = k + 2; m < pts.length - 1; m++) {
-          if (closedGeom && k == 0 && m == pts.length - 2) continue;
-          final b1 = pts[m], b2 = pts[m + 1];
-          if ((b1 - b2).length < 1e-12) continue;
-          if (!_bboxHit(a1, a2, b1, b2)) continue;
-          final res = _segPair(a1, a2, b1, b2);
-          if (res.pts.isEmpty) continue;
-          if (res.overlap > 0.01) {
-            issues.add(_issue(
-              'duplicate',
-              'warning',
-              res.pts,
-              'Дубликат сегментов в контуре №${c.idx + 1}.',
-              'Нормализовать геометрию (лечение).',
-              c.idx,
-            ));
-          } else {
-            issues.add(_issue(
-              'intersection',
-              'warning',
-              res.pts,
-              'Самопересечение в контуре №${c.idx + 1}.',
-              'Нормализовать геометрию (лечение).',
-              c.idx,
-            ));
-          }
-        }
+  // Собираем пары-кандидаты по каждому контуру и выдаём в порядке (k, m)
+  // исходного перебора, чтобы список проблем не изменился.
+  final pathClosed = [
+    for (final c in polys) (c.pts.first - c.pts.last).length < 1e-4
+  ];
+  final selfByPath = List.generate(P, (_) => <(int, int)>[]);
+  for (var i = 0; i < segs.length; i++) {
+    final a = segPath[i];
+    final n = polys[a].pts.length;
+    for (final j in neighbors[i]) {
+      if (j <= i || segPath[j] != a) continue;
+      final k = segLocal[i], m = segLocal[j];
+      if (m < k + 2) continue; // соседние сегменты делят вершину
+      if (pathClosed[a] && k == 0 && m == n - 2) continue; // замыкание кольца
+      selfByPath[a].add((i, j));
+    }
+  }
+  for (var a = 0; a < P; a++) {
+    final pairs = selfByPath[a];
+    if (pairs.isEmpty) continue;
+    pairs.sort((x, y) => x.$1 != y.$1 ? x.$1 - y.$1 : x.$2 - y.$2);
+    for (final (i, j) in pairs) {
+      final a1 = segs[i][0], a2 = segs[i][1];
+      final b1 = segs[j][0], b2 = segs[j][1];
+      if ((a1 - a2).length < 1e-12 || (b1 - b2).length < 1e-12) continue;
+      final res = _segPair(a1, a2, b1, b2);
+      if (res.pts.isEmpty) continue;
+      if (res.overlap > 0.01) {
+        issues.add(_issue(
+          'duplicate',
+          'warning',
+          res.pts,
+          'Дубликат сегментов в контуре №${polys[a].idx + 1}.',
+          'Нормализовать геометрию (лечение).',
+          polys[a].idx,
+        ));
+      } else {
+        issues.add(_issue(
+          'intersection',
+          'warning',
+          res.pts,
+          'Самопересечение в контуре №${polys[a].idx + 1}.',
+          'Нормализовать геометрию (лечение).',
+          polys[a].idx,
+        ));
       }
     }
   }
 
-  // 2. Пересечения/дубликаты между разными контурами.
-  for (var a = 0; a < polys.length; a++) {
-    for (var b = a + 1; b < polys.length; b++) {
-      final pa = polys[a].pts;
-      final pb = polys[b].pts;
-      final hitPts = <Vec2>[];
-      var totalOverlap = 0.0;
-      var hit = false;
-      for (var i = 0; i < pa.length - 1; i++) {
-        final a1 = pa[i], a2 = pa[i + 1];
-        if ((a1 - a2).length < 1e-12) continue;
-        for (var j = 0; j < pb.length - 1; j++) {
-          final b1 = pb[j], b2 = pb[j + 1];
-          if ((b1 - b2).length < 1e-12) continue;
-          if (!_bboxHit(a1, a2, b1, b2)) continue;
-          final res = _segPair(a1, a2, b1, b2);
-          if (res.pts.isEmpty) continue;
-          hit = true;
-          hitPts.addAll(res.pts);
-          totalOverlap += res.overlap;
-        }
+  // 2. Пересечения/дубликаты между разными контурами (одна проблема на пару
+  // контуров, как в оригинале: дубликат при суммарном перекрытии > 0.01).
+  final pairHits = <int, ({List<Vec2> pts, double overlap})>{};
+  for (var i = 0; i < segs.length; i++) {
+    final a = segPath[i];
+    final a1 = segs[i][0], a2 = segs[i][1];
+    for (final j in neighbors[i]) {
+      if (j <= i) continue;
+      final b = segPath[j];
+      if (a == b) continue;
+      final lo = a < b ? a : b;
+      final hi = a < b ? b : a;
+      final key = lo * P + hi;
+      final b1 = segs[j][0], b2 = segs[j][1];
+      if ((a1 - a2).length < 1e-12 || (b1 - b2).length < 1e-12) continue;
+      final res = _segPair(a1, a2, b1, b2);
+      if (res.pts.isEmpty) continue;
+      final cur = pairHits[key];
+      if (cur == null) {
+        pairHits[key] = (pts: List<Vec2>.of(res.pts), overlap: res.overlap);
+      } else {
+        cur.pts.addAll(res.pts);
+        pairHits[key] = (pts: cur.pts, overlap: cur.overlap + res.overlap);
       }
-      if (!hit) continue;
-      if (totalOverlap > 0.01) {
+    }
+  }
+  for (var a = 0; a < P; a++) {
+    for (var b = a + 1; b < P; b++) {
+      final hit = pairHits[a * P + b];
+      if (hit == null) continue;
+      if (hit.overlap > 0.01) {
         issues.add(_issue(
           'duplicate',
           'warning',
-          hitPts,
+          hit.pts,
           'Дубликат: контуры №${polys[a].idx + 1} и №${polys[b].idx + 1}.',
           'Нормализовать геометрию (лечение).',
           polys[a].idx,
@@ -268,7 +357,7 @@ List<Issue> checkIntersectionsDuplicates(List<CamPath> paths) {
         issues.add(_issue(
           'intersection',
           'warning',
-          hitPts,
+          hit.pts,
           'Пересечение контуров №${polys[a].idx + 1} и №${polys[b].idx + 1}.',
           'Нормализовать геометрию (лечение).',
           polys[a].idx,
@@ -358,6 +447,156 @@ double _signedArea(List<Vec2> pts) {
 // Малые зазоры между контурами
 // ============================================================
 
+/// Метрика пары сегментов: расстояние и ближайшие точки (аналог внутренней
+/// логики _linesDistance + _nearestPoints для одной пары).
+({double d, Vec2 p1, Vec2 p2}) _pairMetrics(
+    Vec2 a1, Vec2 a2, Vec2 b1, Vec2 b2) {
+  final hit = _segPair(a1, a2, b1, b2);
+  if (hit.pts.isNotEmpty) return (d: 0.0, p1: hit.pts.first, p2: hit.pts.first);
+  var best = double.infinity;
+  Vec2 q1 = a1, q2 = b1;
+  void upd(double dv, Vec2 u, Vec2 v) {
+    if (dv < best) {
+      best = dv;
+      q1 = u;
+      q2 = v;
+    }
+  }
+
+  final onB1 = _proj(a1, b1, b2);
+  upd((a1 - onB1).length, onB1, a1);
+  final onB2 = _proj(a2, b1, b2);
+  upd((a2 - onB2).length, onB2, a2);
+  final onA1 = _proj(b1, a1, a2);
+  upd((b1 - onA1).length, b1, onA1);
+  final onA2 = _proj(b2, a1, a2);
+  upd((b2 - onA2).length, b2, onA2);
+  return (d: best, p1: q1, p2: q2);
+}
+
+/// Пары сегментов двух контуров, чьи bbox-ы разнесены по осям меньше [near]
+/// (сетка с ячейкой [near], соседство радиуса 1). Гарантированное
+/// НАДмножество пар с расстоянием < [near] (сами расстояния проверяются
+/// дальше точно) — для гигантских контуров это заменяет квадратичный
+/// перебор O(Sa×Sb) почти линейным.
+List<(int, int)> _nearSegmentPairs(List<List<Vec2>> segsAll, double near) {
+  final n = segsAll.length;
+  if (n < 2) return const [];
+  final bxs = List<double>.filled(n, 0);
+  final bys = List<double>.filled(n, 0);
+  final bxe = List<double>.filled(n, 0);
+  final bye = List<double>.filled(n, 0);
+  var minX = double.infinity, maxX = double.negativeInfinity;
+  var minY = double.infinity, maxY = double.negativeInfinity;
+  for (var i = 0; i < n; i++) {
+    final a = segsAll[i][0], b = segsAll[i][1];
+    final x0 = a.x < b.x ? a.x : b.x;
+    final x1 = a.x < b.x ? b.x : a.x;
+    final y0 = a.y < b.y ? a.y : b.y;
+    final y1 = a.y < b.y ? b.y : a.y;
+    bxs[i] = x0;
+    bys[i] = y0;
+    bxe[i] = x1;
+    bye[i] = y1;
+    if (x0 < minX) minX = x0;
+    if (x1 > maxX) maxX = x1;
+    if (y0 < minY) minY = y0;
+    if (y1 > maxY) maxY = y1;
+  }
+  var cell = near <= 0 ? 1e-4 : near;
+  var nx = math.max(1, ((maxX - minX) / cell).ceil());
+  var ny = math.max(1, ((maxY - minY) / cell).ceil());
+  const maxAxis = 2048;
+  if (nx > maxAxis || ny > maxAxis) {
+    cell *= math.max(nx, ny) / maxAxis;
+    nx = math.max(1, ((maxX - minX) / cell).ceil());
+    ny = math.max(1, ((maxY - minY) / cell).ceil());
+  }
+  final buckets = <int, List<int>>{};
+  for (var i = 0; i < n; i++) {
+    final cx0 = (((bxs[i] - minX) / cell).floor()).clamp(0, nx - 1);
+    final cx1 = (((bxe[i] - minX) / cell).floor()).clamp(0, nx - 1);
+    final cy0 = (((bys[i] - minY) / cell).floor()).clamp(0, ny - 1);
+    final cy1 = (((bye[i] - minY) / cell).floor()).clamp(0, ny - 1);
+    for (var cy = cy0; cy <= cy1; cy++) {
+      for (var cx = cx0; cx <= cx1; cx++) {
+        final key = cy * nx + cx;
+        (buckets[key] ??= <int>[]).add(i);
+      }
+    }
+  }
+
+  final seen = <int>{};
+  final pairs = <(int, int)>[];
+  void addPair(int i, int j) {
+    if (i == j) return;
+    final k = i < j ? i * n + j : j * n + i;
+    if (seen.add(k)) pairs.add(i < j ? (i, j) : (j, i));
+  }
+
+  for (final MapEntry(key: key, value: listA) in buckets.entries) {
+    // Внутри одной ячейки — все пары.
+    for (var p = 0; p < listA.length; p++) {
+      for (var q = p + 1; q < listA.length; q++) {
+        addPair(listA[p], listA[q]);
+      }
+    }
+    // 8 соседних ячеек (каждая пара ячеек обрабатывается дважды — дедуп).
+    final cx = key % nx;
+    final cy = key ~/ nx;
+    for (var dx = -1; dx <= 1; dx++) {
+      for (var dy = -1; dy <= 1; dy++) {
+        if (dx == 0 && dy == 0) continue;
+        final xx = cx + dx;
+        final yy = cy + dy;
+        if (xx < 0 || xx >= nx || yy < 0 || yy >= ny) continue;
+        final listB = buckets[yy * nx + xx];
+        if (listB == null) continue;
+        for (final i in listA) {
+          for (final j in listB) {
+            addPair(i, j);
+          }
+        }
+      }
+    }
+  }
+  pairs.sort((x, y) => x.$1 != y.$1 ? x.$1 - y.$1 : x.$2 - y.$2);
+  return pairs;
+}
+
+/// Быстрая проверка малого зазора для гигантских контуров (произведение
+/// количеств сегментов велико): точное минимальное расстояние и ближайшие
+/// точки — но только по парам сегментов, реально способным быть ближе
+/// [near]. null — если min ≥ near или контуры пересекаются (зазор 0).
+({double d, Vec2 p1, Vec2 p2})? _heavyGapMetrics(
+    List<Vec2> pa, List<Vec2> pb, double near) {
+  if (pa.length < 2 || pb.length < 2) return null;
+  final segsAll = <List<Vec2>>[];
+  for (var i = 0; i + 1 < pa.length; i++) {
+    segsAll.add([pa[i], pa[i + 1]]);
+  }
+  final offA = segsAll.length;
+  for (var j = 0; j + 1 < pb.length; j++) {
+    segsAll.add([pb[j], pb[j + 1]]);
+  }
+  final pairs = _nearSegmentPairs(segsAll, near);
+  var best = near; // ищем только зазоры строго меньше near
+  Vec2 q1 = pa.first, q2 = pb.first;
+  for (final (i, j) in pairs) {
+    if (i >= offA || j < offA) continue; // разные контуры
+    final m = _pairMetrics(
+        segsAll[i][0], segsAll[i][1], segsAll[j][0], segsAll[j][1]);
+    if (m.d < best) {
+      best = m.d;
+      q1 = m.p1;
+      q2 = m.p2;
+      if (best <= 0) break; // пересечение — зазор 0
+    }
+  }
+  if (best <= 0 || best >= near) return null;
+  return (d: best, p1: q1, p2: q2);
+}
+
 List<Issue> checkSmallGaps(List<CamPath> paths, double minGap,
     {int maxPairs = 300}) {
   final issues = <Issue>[];
@@ -368,26 +607,106 @@ List<Issue> checkSmallGaps(List<CamPath> paths, double minGap,
     if (paths[i].points.length < 2) continue;
     lines.add((idx: i, pts: paths[i].points));
   }
+  if (lines.isEmpty) return issues;
+
+  // Bbox контуров — для дешёвого отсечения пар, которые заведомо дальше
+  // minGap (иначе на контурах-гигантах проверка «малых зазоров» квадратична
+  // и не укладывается в таймаут анализа).
+  final bxs = List<double>.filled(lines.length, 0);
+  final bys = List<double>.filled(lines.length, 0);
+  final bxe = List<double>.filled(lines.length, 0);
+  final bye = List<double>.filled(lines.length, 0);
+  for (var i = 0; i < lines.length; i++) {
+    final pts = lines[i].pts;
+    var minX = pts[0].x, maxX = pts[0].x;
+    var minY = pts[0].y, maxY = pts[0].y;
+    for (var k = 1; k < pts.length; k++) {
+      final p = pts[k];
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    }
+    bxs[i] = minX;
+    bys[i] = minY;
+    bxe[i] = maxX;
+    bye[i] = maxY;
+  }
+
+  // Единый индекс пар сегментов ВСЕХ контуров с bbox-разнесением < minGap
+  // (сетка радиус 1 — гарантированное надмножество пар, реально способных
+  // быть ближе minGap). Строится ОДИН раз: на контурах-гигантах попарные
+  // сетки «контур против контура» давали сотни секунд.
+  final offsets = <int>[];
+  final segsAll = <List<Vec2>>[];
+  final segLine = <int>[];
+  for (var li = 0; li < lines.length; li++) {
+    final pts = lines[li].pts;
+    offsets.add(segsAll.length);
+    for (var k = 0; k + 1 < pts.length; k++) {
+      segsAll.add([pts[k], pts[k + 1]]);
+      segLine.add(li);
+    }
+  }
+  final nearAll = _nearSegmentPairs(segsAll, minGap);
+  final cands = <int, List<(int, int)>>{};
+  for (final (gi, gj) in nearAll) {
+    final a = segLine[gi], b = segLine[gj];
+    if (a == b) continue;
+    final lo = a < b ? a : b;
+    final hi = a < b ? b : a;
+    final key = lo * lines.length + hi;
+    (cands[key] ??= <(int, int)>[])
+        .add((gi - offsets[a], gj - offsets[b]));
+  }
 
   var count = 0;
   for (var a = 0; a < lines.length; a++) {
     for (var b = a + 1; b < lines.length; b++) {
       count++;
       if (count > maxPairs) return issues;
-      final d = _linesDistance(lines[a].pts, lines[b].pts);
-      if (d > 0.0 && d < minGap) {
-        final (:p1, :p2) = _nearestPoints(lines[a].pts, lines[b].pts);
-        final markers = [_round3(p1), _round3(p2)];
-        issues.add(_issue(
-          'small_gap',
-          'warning',
-          markers,
-          'Зазор ${_fmt3(d)} мм между контурами №${lines[a].idx + 1} и '
-              '№${lines[b].idx + 1} меньше минимального ${_fmt2(minGap)} мм.',
-          'Увеличить межконтурный зазор (раздвинуть элементы макета).',
-          lines[a].idx,
-        ));
+      // Разнесение bbox по осям: если по любой оси >= minGap — расстояние
+      // между контурами не может быть меньше minGap.
+      var sepX = 0.0;
+      var sepY = 0.0;
+      if (bxe[a] < bxs[b]) {
+        sepX = bxs[b] - bxe[a];
+      } else if (bxe[b] < bxs[a]) {
+        sepX = bxs[a] - bxe[b];
       }
+      if (bye[a] < bys[b]) {
+        sepY = bys[b] - bye[a];
+      } else if (bye[b] < bys[a]) {
+        sepY = bys[a] - bye[b];
+      }
+      if (sepX >= minGap || sepY >= minGap) continue;
+      final list = cands[a * lines.length + b];
+      if (list == null || list.isEmpty) continue;
+      final pa = lines[a].pts;
+      final pb = lines[b].pts;
+      var best = minGap; // ищем только зазоры строго меньше minGap
+      Vec2 q1 = pa.first, q2 = pb.first;
+      for (final (il, jl) in list) {
+        final m = _pairMetrics(
+            pa[il], pa[il + 1], pb[jl], pb[jl + 1]);
+        if (m.d < best) {
+          best = m.d;
+          q1 = m.p1;
+          q2 = m.p2;
+          if (best <= 0) break; // пересечение — зазор 0
+        }
+      }
+      if (best <= 0 || best >= minGap) continue;
+      final markers = [_round3(q1), _round3(q2)];
+      issues.add(_issue(
+        'small_gap',
+        'warning',
+        markers,
+        'Зазор ${_fmt3(best)} мм между контурами №${lines[a].idx + 1} и '
+            '№${lines[b].idx + 1} меньше минимального ${_fmt2(minGap)} мм.',
+        'Увеличить межконтурный зазор (раздвинуть элементы макета).',
+        lines[a].idx,
+      ));
     }
   }
   return issues;

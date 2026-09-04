@@ -12,6 +12,7 @@ import '../geom/geom_ops.dart';
 import '../geom/geom_boolean.dart';
 import '../model/cam_path.dart';
 import '../model/vec2.dart';
+import 'dart:math' as math;
 
 class MorphologicalHealer {
   final double tolerance;
@@ -99,8 +100,15 @@ class MorphologicalHealer {
         }
       }
       remaining = <List<Vec2>>[];
-      for (final seg in atomics) {
-        if (!_coveredByBoundary(seg, boundary)) remaining.add(seg);
+      if (boundary.isNotEmpty) {
+        // Индекс границы по сетке: проверка «лежит ли середина отрезка на
+        // грани» только в соседних ячейках вместо полного перебора граней.
+        final boundaryGrid = _BoundaryGrid(boundary);
+        for (final seg in atomics) {
+          if (!boundaryGrid.covered(seg)) remaining.add(seg);
+        }
+      } else {
+        remaining = List.of(atomics);
       }
     } else {
       remaining = List.of(atomics);
@@ -180,14 +188,6 @@ class MorphologicalHealer {
     return out;
   }
 
-  bool _coveredByBoundary(List<Vec2> seg, List<List<Vec2>> boundary) {
-    final mid = Vec2((seg[0].x + seg[1].x) / 2, (seg[0].y + seg[1].y) / 2);
-    for (final e in boundary) {
-      if (pointSegmentDistance(mid, e[0], e[1]) < 1e-6) return true;
-    }
-    return false;
-  }
-
   List<Vec2> _round4(List<Vec2> pts) => pts
       .map((p) => Vec2(
           double.parse(p.x.toStringAsFixed(4)),
@@ -202,5 +202,89 @@ class MorphologicalHealer {
       l += _dist(pts[i - 1], pts[i]);
     }
     return l;
+  }
+}
+
+/// Индекс отрезков границы по равномерной сетке: ответ «лежит ли точка на
+/// грани» (расстояние < 1e-6) ищется только среди рёбер, чей bbox покрывает
+/// ячейку точки и её соседей. Результат идентичен полному перебору: точка на
+/// ребре всегда попадает в ячейку, покрытую bbox ребра (или в соседнюю —
+/// только при вырожденном допуске 1e-6 у самого конца ребра).
+class _BoundaryGrid {
+  final List<List<Vec2>> _edges;
+  final List<int> _empty = const [];
+  double _ox = 0, _oy = 0, _cell = 1;
+  int _nx = 1, _ny = 1;
+  final Map<int, List<int>> _bucket = {};
+
+  _BoundaryGrid(List<List<Vec2>> edges) : _edges = edges {
+    if (edges.isEmpty) return;
+    var minX = edges[0][0].x, maxX = edges[0][0].x;
+    var minY = edges[0][0].y, maxY = edges[0][0].y;
+    for (final e in edges) {
+      for (final p in e) {
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.y > maxY) maxY = p.y;
+      }
+    }
+    final spanX = maxX - minX;
+    final spanY = maxY - minY;
+    var cell = math.max(spanX, spanY) / 256.0;
+    if (cell < 1e-4) cell = 1e-4;
+    var nx = math.max(1, (spanX / cell).ceil());
+    var ny = math.max(1, (spanY / cell).ceil());
+    const maxAxis = 2048;
+    if (nx > maxAxis || ny > maxAxis) {
+      final k = math.max(nx, ny) / maxAxis;
+      cell *= k;
+      nx = math.max(1, (spanX / cell).ceil());
+      ny = math.max(1, (spanY / cell).ceil());
+    }
+    _ox = minX;
+    _oy = minY;
+    _cell = cell;
+    _nx = nx;
+    _ny = ny;
+
+    for (var e = 0; e < edges.length; e++) {
+      final a = edges[e][0], b = edges[e][1];
+      final x0 = a.x < b.x ? a.x : b.x;
+      final x1 = a.x < b.x ? b.x : a.x;
+      final y0 = a.y < b.y ? a.y : b.y;
+      final y1 = a.y < b.y ? b.y : a.y;
+      final cx0 = (((x0 - minX) / cell).floor()).clamp(0, nx - 1);
+      final cx1 = (((x1 - minX) / cell).floor()).clamp(0, nx - 1);
+      final cy0 = (((y0 - minY) / cell).floor()).clamp(0, ny - 1);
+      final cy1 = (((y1 - minY) / cell).floor()).clamp(0, ny - 1);
+      for (var cy = cy0; cy <= cy1; cy++) {
+        for (var cx = cx0; cx <= cx1; cx++) {
+          final key = cy * nx + cx;
+          (_bucket[key] ??= <int>[]).add(e);
+        }
+      }
+    }
+  }
+
+  bool covered(List<Vec2> seg) {
+    if (_edges.isEmpty) return false;
+    final mid = Vec2((seg[0].x + seg[1].x) / 2, (seg[0].y + seg[1].y) / 2);
+    final cx = (((mid.x - _ox) / _cell).floor()).clamp(0, _nx - 1);
+    final cy = (((mid.y - _oy) / _cell).floor()).clamp(0, _ny - 1);
+    for (var dy = -1; dy <= 1; dy++) {
+      for (var dx = -1; dx <= 1; dx++) {
+        final yy = cy + dy;
+        final xx = cx + dx;
+        if (xx < 0 || xx >= _nx || yy < 0 || yy >= _ny) continue;
+        final list = _bucket[yy * _nx + xx] ?? _empty;
+        for (final e in list) {
+          if (pointSegmentDistance(mid, _edges[e][0], _edges[e][1]) < 1e-6) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
   }
 }
