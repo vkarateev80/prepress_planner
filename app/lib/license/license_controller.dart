@@ -48,9 +48,21 @@ class LicenseController extends ChangeNotifier {
   bool get loggedIn => _session != null;
   String? get accountEmail => _session?.email;
 
+  /// Идентификатор этого устройства (machine_id) — device_id сессии.
+  String? _deviceId;
+
+  Future<String> _deviceIdOrError() async {
+    final d = _deviceId;
+    if (d != null && d.isNotEmpty) return d;
+    final machine = await MachineId.load(stateDir);
+    _deviceId = machine;
+    return machine;
+  }
+
   /// Первый запуск: кэш → восстановление сессии → сервер; без кэша и сессии
   /// активируем офлайн-триал 15 дней.
   Future<void> init() async {
+    await _deviceIdOrError();
     final session = await sessionStore.load();
     _session = session;
     final cached = await store.load();
@@ -108,7 +120,8 @@ class LicenseController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Вход в аккаунт.
+  /// Вход в аккаунт (с этого устройства; лимит 1/1 — прежняя сессия
+  /// на другом устройстве будет вытеснена сервером).
   Future<String?> login(String email, String password) async {
     final g = gateway;
     if (g == null) return 'Вход недоступен: сервер не настроен';
@@ -116,7 +129,8 @@ class LicenseController extends ChangeNotifier {
     _accountError = null;
     notifyListeners();
     try {
-      final session = await g.login(email.trim(), password);
+      final deviceId = await _deviceIdOrError();
+      final session = await g.login(email.trim(), password, deviceId);
       _session = session;
       await sessionStore.save(session);
       await _refreshFromServer();
@@ -130,7 +144,7 @@ class LicenseController extends ChangeNotifier {
     }
   }
 
-  /// Регистрация нового аккаунта.
+  /// Регистрация нового аккаунта (с этого устройства).
   Future<String?> register(String email, String password) async {
     final g = gateway;
     if (g == null) return 'Регистрация недоступна: сервер не настроен';
@@ -138,7 +152,8 @@ class LicenseController extends ChangeNotifier {
     _accountError = null;
     notifyListeners();
     try {
-      final session = await g.register(email.trim(), password);
+      final deviceId = await _deviceIdOrError();
+      final session = await g.register(email.trim(), password, deviceId);
       _session = session;
       await sessionStore.save(session);
       await _refreshFromServer();
@@ -149,6 +164,45 @@ class LicenseController extends ChangeNotifier {
     } finally {
       _busy = false;
       notifyListeners();
+    }
+  }
+
+  /// Запросить код сброса пароля. Возвращает dev_code (если почта не
+  /// настроена — код придёт в ответе) либо null (код ушёл на email).
+  Future<({String? error, String? devCode})> forgot(String email) async {
+    final g = gateway;
+    if (g == null) {
+      return (error: 'Сброс недоступен: сервер не настроен', devCode: null);
+    }
+    try {
+      final code = await g.forgot(email.trim());
+      return (error: null, devCode: code);
+    } on Exception catch (e) {
+      return (error: e.toString(), devCode: null);
+    }
+  }
+
+  /// Сбросить пароль по коду.
+  Future<String?> reset(String email, String code, String newPassword) async {
+    final g = gateway;
+    if (g == null) return 'Сброс недоступен: сервер не настроен';
+    try {
+      await g.reset(email.trim(), code.trim(), newPassword);
+      return null;
+    } on Exception catch (e) {
+      return e.toString();
+    }
+  }
+
+  /// Активные устройства аккаунта (лимит 1/1 — максимум одно).
+  Future<List<AccountDevice>> devices() async {
+    final g = gateway;
+    final s = _session;
+    if (g == null || s == null) return const [];
+    try {
+      return await g.devices(s.token);
+    } on Exception {
+      return const [];
     }
   }
 

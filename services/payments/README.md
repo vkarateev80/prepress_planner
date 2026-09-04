@@ -5,8 +5,9 @@
 продлевается. Реальный платёжный провайдер подключается позже — контракт
 (checkout → order → confirm/webhook) уже заложен.
 
-Токены проверяются HMAC-подписью (общий `PP_AUTH_SECRET` с сервисом auth) —
-без HTTP-зависимости между сервисами. Пользователь — claim «sub» токена.
+Токены НЕ проверяются локально: сервис вызывает микросервис авторизации
+(`POST {PP_AUTH_URL}/auth/verify` с Bearer). Это позволяет auth отзывать
+сессии (выход, лимит устройств 1/1) — payments видит отзыв сразу.
 Хранилище — SQLite (`PP_DATA_DIR/payments.db`).
 
 ## API
@@ -23,7 +24,7 @@
 
 | Переменная | По умолчанию | Назначение |
 |---|---|---|
-| `PP_AUTH_SECRET` | — (обязателен) | Общий секрет с auth (≥ 16 символов) |
+| `PP_AUTH_URL` | — (обязателен) | Адрес auth (`http://auth:8121` в docker) |
 | `PP_DATA_DIR` | `<сервис>/data` | Каталог БД |
 | `PP_PUBLIC_BASE` | пусто | Публичный адрес для `url` оплаты |
 
@@ -31,7 +32,7 @@
 
 ```bash
 pip install -r requirements.txt
-set PP_AUTH_SECRET=...
+set PP_AUTH_URL=http://127.0.0.1:8121
 uvicorn payments_app.main:app --port 8122
 ```
 
@@ -39,7 +40,8 @@ uvicorn payments_app.main:app --port 8122
 
 ```bash
 docker build -t pp-payments .
-docker run -p 8122:8122 -e PP_AUTH_SECRET=... -v pay-data:/srv/payments/data pp-payments
+docker run -p 8122:8122 -e PP_AUTH_URL=http://auth:8121 \
+  -v pay-data:/srv/payments/data pp-payments
 ```
 
 ## Тесты

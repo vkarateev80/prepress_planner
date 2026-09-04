@@ -9,23 +9,24 @@
   3) POST /payments/webhook — заглушка вебхука провайдера (по order_id);
   4) GET /payments/subscription (Bearer) → {plan, pro, until}.
 
-Токены проверяются той же HMAC-подписью, что и в auth (общий PP_AUTH_SECRET) —
-сервисы не ходят друг к другу по HTTP. Пользователь идентифицируется по
-claim «sub» токена. Хранилище — SQLite (PP_DATA_DIR/payments.db).
+Токены НЕ проверяются локально: сервис обращается к микросервису авторизации
+(POST {PP_AUTH_URL}/auth/verify с Bearer) — это позволяет auth отзывать сессии
+(выход, лимит устройств 1/1), а payments видит отзыв сразу.
+Хранилище — SQLite (PP_DATA_DIR/payments.db).
 
 env:
-  PP_AUTH_SECRET — общий секрет с auth (обязателен)
+  PP_AUTH_URL    — адрес auth (обязателен; в docker — http://auth:8121)
   PP_DATA_DIR    — каталог БД
   PP_PUBLIC_BASE — публичный адрес сервиса для url оплаты (по умолчанию пусто)
 """
 import json
 import os
-import secrets
 import sqlite3
 import threading
 import time
 import uuid
-from contextlib import asynccontextmanager
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException
@@ -36,9 +37,9 @@ DATA = Path(os.environ.get("PP_DATA_DIR") or (BASE / "data"))
 DATA.mkdir(parents=True, exist_ok=True)
 DB_PATH = DATA / "payments.db"
 
-SECRET = os.environ.get("PP_AUTH_SECRET", "").strip()
-if len(SECRET) < 16:
-    raise RuntimeError("PP_AUTH_SECRET обязателен (≥ 16 символов)")
+AUTH_URL = os.environ.get("PP_AUTH_URL", "").strip().rstrip("/")
+if not AUTH_URL:
+    raise RuntimeError("PP_AUTH_URL обязателен (адрес микросервиса auth)")
 PUBLIC_BASE = os.environ.get("PP_PUBLIC_BASE", "").strip().rstrip("/")
 
 _db_lock = threading.Lock()
@@ -80,26 +81,38 @@ def _init_db():
         )
 
 
-# ---------- токены ----------
+# ---------- проверка токена через auth ----------
+
+def verify_token(token: str) -> dict:
+    """Вызов auth POST /auth/verify: токен → {sub, email} (живая сессия).
+
+    Отдельная функция — в тестах подменяется фейком (без HTTP).
+    """
+    req = Request(
+        f"{AUTH_URL}/auth/verify",
+        data=b"",
+        headers={"Authorization": f"Bearer {token}"},
+        method="POST",
+    )
+    try:
+        with urlopen(req, timeout=8) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+    except HTTPError as e:
+        body_text = e.read().decode("utf-8", errors="replace")
+        raise HTTPException(
+            status_code=401,
+            detail=f"Недействительный токен: {body_text[:200]}")
+    except (URLError, TimeoutError, OSError) as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Сервис авторизации недоступен: {e}")
+    return {"sub": body.get("sub"), "email": body.get("email")}
+
 
 def _auth_dep(authorization: str | None = Header(default=None)) -> dict:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Требуется токен")
-    token = authorization[7:].strip()
-    try:
-        sig, body = token.split(".", 1)
-        import hashlib
-        import hmac
-        expect = hmac.new(SECRET.encode(), body.encode(),
-                          hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(sig, expect):
-            raise ValueError("bad signature")
-        payload = json.loads(body)
-        if int(payload.get("exp", 0)) < int(time.time()):
-            raise ValueError("expired")
-        return {"sub": payload["sub"], "email": payload.get("email")}
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=401, detail=f"Недействительный токен: {e}")
+    return verify_token(authorization[7:].strip())
 
 
 # ---------- модели ----------

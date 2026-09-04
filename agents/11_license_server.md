@@ -1,61 +1,55 @@
 # Агент 11 — Микросервисы авторизации (services/auth) и оплаты (services/payments)
 
 ## Роль (Ф4)
-Аккаунты email+пароль и подписка Pro (месяц/год) как два микросервиса
-(вместо единого license-сервера на machine-id). Платёжный провайдер — пока
-заглушка (checkout → confirm/webhook), контракт заложен под подключение
-ЮKassa/Robokassa/Stripe позже.
-
-## Создаваемые файлы
-```
-services/auth/auth_app/main.py       # FastAPI: /auth/register|login|logout|me, /healthz
-services/auth/auth_app/__init__.py
-services/auth/tests/test_auth.py
-services/auth/requirements.txt        # fastapi, uvicorn, pydantic, pytest, httpx
-services/auth/Dockerfile              # python:3.12-slim, порт 8121
-services/auth/README.md
-
-services/payments/payments_app/main.py  # /payments/plans|checkout|orders/{id}/confirm|webhook|subscription
-services/payments/payments_app/__init__.py
-services/payments/tests/test_payments.py
-services/payments/requirements.txt
-services/payments/Dockerfile           # порт 8122
-services/payments/README.md
-
-services/docker-compose.yml            # converter+auth+payments (общий секрет)
-services/.env.example                  # PP_AUTH_SECRET
-```
-
-## API
-- auth: `POST /auth/register` `{email, password}` → `{token, user}`;
-  `POST /auth/login` → то же; `POST /auth/logout` (Bearer);
-  `GET /auth/me` (Bearer); `GET /healthz`.
-- payments: `GET /payments/plans`; `POST /payments/checkout` `{plan}` →
-  `{order_id, plan, amount_rub, status: pending, url, hint}`;
-  `POST /payments/orders/{id}/confirm` (Bearer) — тестовая оплата;
-  `POST /payments/webhook` `{order_id}` — заглушка вебхука провайдера;
-  `GET /payments/subscription` → `{plan, pro, until}`; `GET /healthz`.
+Аккаунты email+пароль и подписка Pro (месяц/год) как два микросервиса.
+Платёжный провайдер — заглушка (checkout → confirm/webhook), контракт заложен
+под подключение ЮKassa/Robokassa/Stripe позже.
 
 ## Ключевые решения
-- Токены — HMAC-SHA256, stateless; подпись проверяют и auth, и payments
-  (общий `PP_AUTH_SECRET`). Сервисы не ходят друг к другу по HTTP.
-- Пароли — pbkdf2_hmac (sha256, 200k итераций, соль на пользователя).
-- Хранилище — SQLite: auth → users; payments → orders + subscriptions.
-- Подписка продлевается от конца текущей (если активна), иначе от сейчас.
-- Заказы приватны: confirm видит только заказ своего user_id (sub токена).
-- env: `PP_AUTH_SECRET` (обязателен, ≥16), `PP_DATA_DIR`, `PP_TOKEN_TTL`,
-  `PP_PUBLIC_BASE` (payments), `PP_MAX_MB` не нужен.
-- Ошибки — русские тексты в `detail`; 401/404/409/422 по смыслу.
+- **Серверные сессии** (не stateless-токены): таблица sessions, opaque-токен,
+  в БД — только sha256. Выход реально отзывает сессию.
+- **Лимит устройств 1/1**: login/register принимают `device_id` (machine_id
+  приложения); новый вход вытесняет прежние сессии пользователя.
+- **Payments не знает секрета**: проверяет токен внутренним вызовом auth
+  `POST /auth/verify` (env `PP_AUTH_URL`); отзыв сессии виден сразу.
+- **Сброс пароля**: `/auth/forgot` → одноразовый код (6 цифр, TTL) на email
+  через SMTP; без SMTP (dev) код возвращается в ответе `dev_code`.
+  `/auth/reset` меняет пароль и отзывает все сессии.
+
+## API auth (порт 8121)
+- `POST /auth/register` `{email, password, device_id}` → `{token, user}`
+- `POST /auth/login` `{email, password, device_id}` → `{token, user}`
+- `POST /auth/logout` (Bearer) — отзыв сессии
+- `GET /auth/me` (Bearer)
+- `GET /auth/devices` (Bearer) → `{devices: [{device_id, current}], limit: 1}`
+- `POST /auth/verify` (Bearer) — внутренний вызов payments → `{sub, email}`
+- `POST /auth/forgot` `{email}` → `{ok, dev_code?}`
+- `POST /auth/reset` `{email, code, new_password}` → `{ok}`
+- `GET /healthz` → sessions: server-side, device_limit, smtp
+
+## API payments (порт 8122)
+- `GET /payments/plans` — month 990 ₽ / year 9900 ₽
+- `POST /payments/checkout` (Bearer) `{plan}` → заказ pending
+- `POST /payments/orders/{id}/confirm` (Bearer) — тестовая оплата
+- `POST /payments/webhook` `{order_id}` — заглушка вебхука
+- `GET /payments/subscription` (Bearer) → `{plan, pro, until}`
+
+## env
+- auth: `PP_AUTH_SECRET` (≥16), `PP_DATA_DIR`, `PP_TOKEN_TTL` (ч),
+  `PP_RESET_TTL` (мин), `PP_SMTP_HOST/PORT/USER/PASSWORD/FROM`, `PP_SMTP_SSL`
+- payments: `PP_AUTH_URL` (обязателен; в docker `http://auth:8121`),
+  `PP_DATA_DIR`, `PP_PUBLIC_BASE`
 
 ## Тесты (pytest)
-1. auth: register→login→me; повторный register → 409; неверный пароль → 401;
-   некорректный email/короткий пароль → 422; me без токена → 401;
-   round-trip verify_token.
-2. payments: checkout требует токен; полный цикл checkout→confirm→Pro;
-   цепочка продлений (год после месяца от конца); чужой заказ → 404;
-   вебхук-заглушка; неизвестный план → 422.
+- auth: register/login/me; повторный register 409; неверный пароль 401;
+  **1/1: вход с dev-b отзывает dev-a** (старый токен → 401 me);
+  logout отзывает; forgot+reset (dev-код, старый пароль не подходит,
+  одноразовость кода); /auth/verify.
+- payments: checkout без токена 401; полный цикл checkout→confirm→Pro;
+  цепочка продлений; чужой заказ 404; вебхук; неверный план 422;
+  **отозванный токен (verify → 401) отклоняется**.
 
 ## Критерии приёмки
 1. `pytest services/auth/tests services/payments/tests` — зелёный.
-2. Образы собираются (`docker build`), /healthz отвечает.
-3. .env.example без секретов; README с API каждого сервиса.
+2. E2E: вход со «второго устройства» вытесняет первое и в auth, и в payments.
+3. .env.example без секретов; README каждого сервиса.

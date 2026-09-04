@@ -1,7 +1,8 @@
 /// Клиенты аккаунта: авторизация (auth) и оплата (payments).
 ///
-/// Без внешних pub-пакетов: dart:io HttpClient. Токен (Bearer) выдаёт auth;
-/// payments проверяет его той же HMAC-подписью. Адреса по умолчанию — VPS:
+/// Без внешних pub-пакетов: dart:io HttpClient. Токен (Bearer) выдаёт auth и
+/// хранит СЕРВЕРНУЮ сессию (лимит устройств 1/1: новый вход вытесняет старый);
+/// payments проверяет токен внутренним вызовом auth. Адреса по умолчанию — VPS:
 ///   auth     — env PP_AUTH_URL     либо http://193.233.193.12:8121
 ///   payments — env PP_PAYMENTS_URL либо http://193.233.193.12:8122
 library;
@@ -51,6 +52,34 @@ class ServerSubscription {
   }
 }
 
+/// Устройство аккаунта (сессия).
+class AccountDevice {
+  final String deviceId;
+  final bool current;
+  final DateTime? createdAt;
+  final DateTime? expiresAt;
+  const AccountDevice({
+    required this.deviceId,
+    required this.current,
+    this.createdAt,
+    this.expiresAt,
+  });
+
+  factory AccountDevice.fromJson(Map<String, dynamic> j) => AccountDevice(
+        deviceId: (j['device_id'] as String?) ?? '',
+        current: j['current'] == true,
+        createdAt: j['created_at'] == null
+            ? null
+            : _fromEpoch((j['created_at'] as num).toDouble()),
+        expiresAt: j['expires_at'] == null
+            ? null
+            : _fromEpoch((j['expires_at'] as num).toDouble()),
+      );
+
+  static DateTime? _fromEpoch(double s) =>
+      DateTime.fromMillisecondsSinceEpoch((s * 1000).round());
+}
+
 /// Хранилище сессии на диске: state/session.json.
 class SessionStore {
   final String directory;
@@ -87,14 +116,24 @@ class SessionStore {
 
 /// Шлюз аккаунта: auth + payments. В тестах подменяется фейком.
 abstract class AccountGateway {
-  /// Регистрация: email+пароль → сессия.
-  Future<AccountSession> register(String email, String password);
+  /// Регистрация: email+пароль на устройстве [deviceId] → сессия.
+  Future<AccountSession> register(
+      String email, String password, String deviceId);
 
-  /// Вход: email+пароль → сессия.
-  Future<AccountSession> login(String email, String password);
+  /// Вход на устройстве [deviceId]: старые сессии вытесняются (лимит 1/1).
+  Future<AccountSession> login(String email, String password, String deviceId);
 
-  /// Выход (токен на сервере отзывается; локально токен удаляется).
+  /// Выход (серверная сессия отзывается).
   Future<void> logout(String token);
+
+  /// Активные устройства аккаунта (лимит 1 → список из одной сессии).
+  Future<List<AccountDevice>> devices(String token);
+
+  /// Запросить код сброса пароля. Возвращает dev_code (без SMTP) или null.
+  Future<String?> forgot(String email);
+
+  /// Сбросить пароль по коду.
+  Future<void> reset(String email, String code, String newPassword);
 
   /// Текущая подписка пользователя по токену.
   Future<ServerSubscription> subscription(String token);
@@ -103,7 +142,6 @@ abstract class AccountGateway {
   Future<List<Map<String, dynamic>>> plans(String token);
 
   /// Создать заказ (заглушка) и оплатить его тестовым подтверждением.
-  /// Возвращает {order_id, plan, until}.
   Future<Map<String, dynamic>> purchase(String token, String plan);
 }
 
@@ -116,15 +154,27 @@ class AccountGatewayHttp implements AccountGateway {
         payments = payments ?? PaymentsApi();
 
   @override
-  Future<AccountSession> register(String email, String password) =>
-      auth.register(email, password);
+  Future<AccountSession> register(
+          String email, String password, String deviceId) =>
+      auth.register(email, password, deviceId);
 
   @override
-  Future<AccountSession> login(String email, String password) =>
-      auth.login(email, password);
+  Future<AccountSession> login(
+          String email, String password, String deviceId) =>
+      auth.login(email, password, deviceId);
 
   @override
   Future<void> logout(String token) => auth.logout(token);
+
+  @override
+  Future<List<AccountDevice>> devices(String token) => auth.devices(token);
+
+  @override
+  Future<String?> forgot(String email) => auth.forgot(email);
+
+  @override
+  Future<void> reset(String email, String code, String newPassword) =>
+      auth.reset(email, code, newPassword);
 
   @override
   Future<ServerSubscription> subscription(String token) async {
@@ -161,11 +211,15 @@ class AuthApi {
 
   static const _timeout = Duration(seconds: 8);
 
-  Future<AccountSession> register(String email, String password) =>
-      _post('/auth/register', {'email': email, 'password': password});
+  Future<AccountSession> register(
+          String email, String password, String deviceId) =>
+      _post('/auth/register',
+          {'email': email, 'password': password, 'device_id': deviceId});
 
-  Future<AccountSession> login(String email, String password) =>
-      _post('/auth/login', {'email': email, 'password': password});
+  Future<AccountSession> login(
+          String email, String password, String deviceId) =>
+      _post('/auth/login',
+          {'email': email, 'password': password, 'device_id': deviceId});
 
   Future<AccountSession> _post(String path, Map<String, dynamic> body) async {
     final client = HttpClient()..connectionTimeout = _timeout;
@@ -210,6 +264,87 @@ class AuthApi {
       await resp.drain<void>();
     } on Exception {
       // Выход локальный: сервер недоступен — не критично.
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Future<List<AccountDevice>> devices(String token) async {
+    final client = HttpClient()..connectionTimeout = _timeout;
+    try {
+      final req = await client
+          .getUrl(Uri.parse('$_base/auth/devices'))
+          .timeout(_timeout);
+      req.headers.set('Authorization', 'Bearer $token');
+      final resp = await req.close().timeout(_timeout);
+      final text = await utf8.decodeStream(resp).timeout(_timeout);
+      if (resp.statusCode == 200) {
+        final j = jsonDecode(text) as Map<String, dynamic>;
+        final list = (j['devices'] as List? ?? [])
+            .cast<Map<String, dynamic>>();
+        return list.map(AccountDevice.fromJson).toList();
+      }
+      throw ApiException(_detail(text), statusCode: resp.statusCode);
+    } on ApiException {
+      rethrow;
+    } on SocketException {
+      throw const ApiException('Сервер авторизации недоступен. Проверьте сеть.');
+    } on TimeoutException {
+      throw const ApiException('Сервер авторизации не отвечает.');
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Future<String?> forgot(String email) async {
+    final client = HttpClient()..connectionTimeout = _timeout;
+    try {
+      final req = await client
+          .postUrl(Uri.parse('$_base/auth/forgot'))
+          .timeout(_timeout);
+      req.headers.contentType = ContentType.json;
+      req.write(jsonEncode({'email': email}));
+      final resp = await req.close().timeout(_timeout);
+      final text = await utf8.decodeStream(resp).timeout(_timeout);
+      if (resp.statusCode == 200) {
+        final j = jsonDecode(text) as Map<String, dynamic>;
+        return j['dev_code'] as String?; // null, если код ушёл по почте
+      }
+      throw ApiException(_detail(text), statusCode: resp.statusCode);
+    } on ApiException {
+      rethrow;
+    } on SocketException {
+      throw const ApiException('Сервер авторизации недоступен. Проверьте сеть.');
+    } on TimeoutException {
+      throw const ApiException('Сервер авторизации не отвечает.');
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Future<void> reset(String email, String code, String newPassword) async {
+    final client = HttpClient()..connectionTimeout = _timeout;
+    try {
+      final req = await client
+          .postUrl(Uri.parse('$_base/auth/reset'))
+          .timeout(_timeout);
+      req.headers.contentType = ContentType.json;
+      req.write(jsonEncode({
+        'email': email,
+        'code': code,
+        'new_password': newPassword,
+      }));
+      final resp = await req.close().timeout(_timeout);
+      final text = await utf8.decodeStream(resp).timeout(_timeout);
+      if (resp.statusCode != 200) {
+        throw ApiException(_detail(text), statusCode: resp.statusCode);
+      }
+    } on ApiException {
+      rethrow;
+    } on SocketException {
+      throw const ApiException('Сервер авторизации недоступен. Проверьте сеть.');
+    } on TimeoutException {
+      throw const ApiException('Сервер авторизации не отвечает.');
     } finally {
       client.close(force: true);
     }

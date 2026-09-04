@@ -11,5 +11,5 @@ ENV PP_DATA_DIR=/srv/payments/data
 RUN mkdir -p "$PP_DATA_DIR"
 
 EXPOSE 8122
-# PP_AUTH_SECRET (общий с auth) задаётся в docker-compose / окружении.
+# PP_AUTH_URL (адрес auth, в docker — http://auth:8121) задаётся в compose/env.
 CMD ["uvicorn", "payments_app.main:app", "--host", "0.0.0.0", "--port", "8122"]
