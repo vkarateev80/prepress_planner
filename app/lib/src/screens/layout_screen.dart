@@ -49,7 +49,7 @@ class _LayoutScreenState extends State<LayoutScreen> {
   int? _pending;
 
   /// Рейтинг результата расхода среди существующих магнитных валов (Z).
-  static const _defaultZList = '24, 28, 32, 36, 40, 48, 56, 64';
+  static const _defaultZList = '88, 96, 120, 176';
   final _zCtrl = TextEditingController(text: _defaultZList);
   List<({int z, MaterialResult calc})> _zRating = [];
   String _zCriterion = 'waste'; // 'waste' | 'length' | 'count'
@@ -395,7 +395,7 @@ class _LayoutScreenState extends State<LayoutScreen> {
                     labelText: 'Магнитные валы, Z (через запятую)',
                     border: OutlineInputBorder(),
                     isDense: true,
-                    helperText: 'Пример: 24, 28, 32, 36, 40, 48, 56, 64'),
+                    helperText: 'Пример: 88, 96, 120, 176'),
               ),
             ),
             const SizedBox(width: 8),
