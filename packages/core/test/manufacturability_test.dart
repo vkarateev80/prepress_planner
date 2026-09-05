@@ -1,6 +1,7 @@
 // Тесты анализа технологичности (аг.06): порт test_manufacturability.py
 // + фикстуры quadroring/petlya_open_artifacts.
 import '../tool/test_utils.dart';
+import '../lib/io.dart';
 import '../lib/src/parser/dxf_parser.dart';
 import '../lib/src/manufacturability/geometry_checks.dart';
 import '../lib/src/manufacturability/analyzer.dart';

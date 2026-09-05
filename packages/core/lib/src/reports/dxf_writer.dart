@@ -6,8 +6,6 @@
 /// не-ASCII символами кодируются как \U+XXXX (семантика ezdxf/парсера).
 library;
 
-import 'dart:io';
-
 import '../model/cam_path.dart';
 
 /// Не-ASCII символы имени слоя → \U+XXXX (по 4 hex-цифры на символ BMP).
@@ -25,10 +23,10 @@ String _encodeDxfName(String s) {
 
 String _num(double v) => v.toStringAsFixed(4);
 
-/// Пишет DXF-файл с путями [paths] (каждый — LWPOLYLINE на своём слое).
+/// Текст DXF-файла с путями [paths] (каждый — LWPOLYLINE на своём слое).
 /// [version] — 'AC1015' (R2000); при других значениях заголовок меняется.
-void writeDxf(String outPath, List<CamPath> paths,
-    {String version = 'AC1015'}) {
+/// Чистая функция: файл на диск пишет io-фасад (lib/io.dart).
+String buildDxfText(List<CamPath> paths, {String version = 'AC1015'}) {
   final sb = StringBuffer();
   void pair(int code, String value) {
     sb.write('$code\r\n$value\r\n');
@@ -83,5 +81,5 @@ void writeDxf(String outPath, List<CamPath> paths,
   pair(0, 'ENDSEC');
   pair(0, 'EOF');
 
-  File(outPath).writeAsStringSync(sb.toString());
+  return sb.toString();
 }

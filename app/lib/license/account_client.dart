@@ -1,15 +1,18 @@
 /// Клиенты аккаунта: авторизация (auth) и оплата (payments).
 ///
-/// Без внешних pub-пакетов: dart:io HttpClient. Токен (Bearer) выдаёт auth и
-/// хранит СЕРВЕРНУЮ сессию (лимит устройств 1/1: новый вход вытесняет старый);
-/// payments проверяет токен внутренним вызовом auth. Адреса по умолчанию — VPS:
-///   auth     — env PP_AUTH_URL     либо http://193.233.193.12:8121
-///   payments — env PP_PAYMENTS_URL либо http://193.233.193.12:8122
+/// Без внешних pub-пакетов: общий HTTP-слой (dart:io на desktop, XHR на web).
+/// Токен (Bearer) выдаёт auth и хранит СЕРВЕРНУЮ сессию (лимит устройств 1/1:
+/// новый вход вытесняет старый); payments проверяет токен внутренним вызовом
+/// auth. Адреса: env PP_AUTH_URL/PP_PAYMENTS_URL (desktop), на web — тот же
+/// origin (проксирование /auth, /payments на VPS).
 library;
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
+
+import '../platform/env.dart';
+import '../platform/http.dart';
+import '../platform/json_store.dart';
 
 /// Ошибка API с русским сообщением для UI.
 class ApiException implements Exception {
@@ -80,23 +83,20 @@ class AccountDevice {
       DateTime.fromMillisecondsSinceEpoch((s * 1000).round());
 }
 
-/// Хранилище сессии на диске: state/session.json.
+/// Хранилище сессии: JSON (файл или localStorage — среда сама решит).
 class SessionStore {
-  final String directory;
-  SessionStore(this.directory);
+  final JsonStore _store;
+  SessionStore(String directory) : _store = JsonStore(directory);
 
   Future<void> save(AccountSession s) async {
-    final dir = Directory(directory);
-    await dir.create(recursive: true);
-    await File('${dir.path}/session.json')
-        .writeAsString(jsonEncode(s.toJson()), flush: true);
+    await _store.write('session.json', jsonEncode(s.toJson()));
   }
 
   Future<AccountSession?> load() async {
-    final f = File('${directory == '' ? '.' : directory}/session.json');
-    if (!await f.exists()) return null;
+    final raw = await _store.read('session.json');
+    if (raw == null) return null;
     try {
-      final j = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
+      final j = jsonDecode(raw) as Map<String, dynamic>;
       final s = AccountSession.fromJson(j);
       return s.token.isEmpty ? null : s;
     } catch (_) {
@@ -105,12 +105,7 @@ class SessionStore {
   }
 
   Future<void> clear() async {
-    final f = File('${directory == '' ? '.' : directory}/session.json');
-    if (await f.exists()) {
-      try {
-        await f.delete();
-      } catch (_) {}
-    }
+    await _store.delete('session.json');
   }
 }
 
@@ -203,13 +198,16 @@ class AuthApi {
   final String baseUrl;
   AuthApi({String? baseUrl}) : baseUrl = baseUrl ?? defaultUrl();
 
-  static String defaultUrl() {
-    final env = Platform.environment['PP_AUTH_URL']?.trim();
-    if (env != null && env.isNotEmpty) return env;
-    return 'http://193.233.193.12:8121';
-  }
+  static String defaultUrl() =>
+      envOrDefault('PP_AUTH_URL', 'http://193.233.193.12:8121');
 
   static const _timeout = Duration(seconds: 8);
+  static const _unavailable = ApiException('Сервер авторизации недоступен. '
+      'Проверьте сеть.');
+  static const _noAnswer = ApiException('Сервер авторизации не отвечает.');
+
+  String get _base =>
+      baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
 
   Future<AccountSession> register(
           String email, String password, String deviceId) =>
@@ -222,17 +220,11 @@ class AuthApi {
           {'email': email, 'password': password, 'device_id': deviceId});
 
   Future<AccountSession> _post(String path, Map<String, dynamic> body) async {
-    final client = HttpClient()..connectionTimeout = _timeout;
     try {
-      final req = await client
-          .postUrl(Uri.parse('$_base$path'))
-          .timeout(_timeout);
-      req.headers.contentType = ContentType.json;
-      req.write(jsonEncode(body));
-      final resp = await req.close().timeout(_timeout);
-      final text = await utf8.decodeStream(resp).timeout(_timeout);
-      if (resp.statusCode == 200) {
-        final j = jsonDecode(text) as Map<String, dynamic>;
+      final resp = await httpJsonPost('$_base$path',
+          json: body, timeout: _timeout);
+      if (resp.status == 200) {
+        final j = jsonDecode(resp.text) as Map<String, dynamic>;
         final token = j['token'] as String?;
         final user = j['user'] as Map<String, dynamic>?;
         if (token == null || token.isEmpty) {
@@ -241,117 +233,79 @@ class AuthApi {
         return AccountSession(
             token: token, email: (user?['email'] as String?) ?? '');
       }
-      throw ApiException(_detail(text), statusCode: resp.statusCode);
+      throw ApiException(_detail(resp.text), statusCode: resp.status);
     } on ApiException {
       rethrow;
-    } on SocketException {
-      throw const ApiException('Сервер авторизации недоступен. Проверьте сеть.');
     } on TimeoutException {
-      throw const ApiException('Сервер авторизации не отвечает.');
-    } finally {
-      client.close(force: true);
+      throw _noAnswer;
+    } on NetworkException {
+      throw _unavailable;
     }
   }
 
   Future<void> logout(String token) async {
-    final client = HttpClient()..connectionTimeout = _timeout;
     try {
-      final req = await client
-          .postUrl(Uri.parse('$_base/auth/logout'))
-          .timeout(_timeout);
-      req.headers.set('Authorization', 'Bearer $token');
-      final resp = await req.close().timeout(_timeout);
-      await resp.drain<void>();
+      await httpJsonPost('$_base/auth/logout',
+          headers: {'Authorization': 'Bearer $token'},
+          timeout: _timeout);
     } on Exception {
       // Выход локальный: сервер недоступен — не критично.
-    } finally {
-      client.close(force: true);
     }
   }
 
   Future<List<AccountDevice>> devices(String token) async {
-    final client = HttpClient()..connectionTimeout = _timeout;
     try {
-      final req = await client
-          .getUrl(Uri.parse('$_base/auth/devices'))
-          .timeout(_timeout);
-      req.headers.set('Authorization', 'Bearer $token');
-      final resp = await req.close().timeout(_timeout);
-      final text = await utf8.decodeStream(resp).timeout(_timeout);
-      if (resp.statusCode == 200) {
-        final j = jsonDecode(text) as Map<String, dynamic>;
-        final list = (j['devices'] as List? ?? [])
-            .cast<Map<String, dynamic>>();
+      final resp = await httpJsonGet('$_base/auth/devices',
+          headers: {'Authorization': 'Bearer $token'}, timeout: _timeout);
+      if (resp.status == 200) {
+        final j = jsonDecode(resp.text) as Map<String, dynamic>;
+        final list = (j['devices'] as List? ?? []).cast<Map<String, dynamic>>();
         return list.map(AccountDevice.fromJson).toList();
       }
-      throw ApiException(_detail(text), statusCode: resp.statusCode);
+      throw ApiException(_detail(resp.text), statusCode: resp.status);
     } on ApiException {
       rethrow;
-    } on SocketException {
-      throw const ApiException('Сервер авторизации недоступен. Проверьте сеть.');
     } on TimeoutException {
-      throw const ApiException('Сервер авторизации не отвечает.');
-    } finally {
-      client.close(force: true);
+      throw _noAnswer;
+    } on NetworkException {
+      throw _unavailable;
     }
   }
 
   Future<String?> forgot(String email) async {
-    final client = HttpClient()..connectionTimeout = _timeout;
     try {
-      final req = await client
-          .postUrl(Uri.parse('$_base/auth/forgot'))
-          .timeout(_timeout);
-      req.headers.contentType = ContentType.json;
-      req.write(jsonEncode({'email': email}));
-      final resp = await req.close().timeout(_timeout);
-      final text = await utf8.decodeStream(resp).timeout(_timeout);
-      if (resp.statusCode == 200) {
-        final j = jsonDecode(text) as Map<String, dynamic>;
+      final resp = await httpJsonPost('$_base/auth/forgot',
+          json: {'email': email}, timeout: _timeout);
+      if (resp.status == 200) {
+        final j = jsonDecode(resp.text) as Map<String, dynamic>;
         return j['dev_code'] as String?; // null, если код ушёл по почте
       }
-      throw ApiException(_detail(text), statusCode: resp.statusCode);
+      throw ApiException(_detail(resp.text), statusCode: resp.status);
     } on ApiException {
       rethrow;
-    } on SocketException {
-      throw const ApiException('Сервер авторизации недоступен. Проверьте сеть.');
     } on TimeoutException {
-      throw const ApiException('Сервер авторизации не отвечает.');
-    } finally {
-      client.close(force: true);
+      throw _noAnswer;
+    } on NetworkException {
+      throw _unavailable;
     }
   }
 
   Future<void> reset(String email, String code, String newPassword) async {
-    final client = HttpClient()..connectionTimeout = _timeout;
     try {
-      final req = await client
-          .postUrl(Uri.parse('$_base/auth/reset'))
-          .timeout(_timeout);
-      req.headers.contentType = ContentType.json;
-      req.write(jsonEncode({
-        'email': email,
-        'code': code,
-        'new_password': newPassword,
-      }));
-      final resp = await req.close().timeout(_timeout);
-      final text = await utf8.decodeStream(resp).timeout(_timeout);
-      if (resp.statusCode != 200) {
-        throw ApiException(_detail(text), statusCode: resp.statusCode);
+      final resp = await httpJsonPost('$_base/auth/reset',
+          json: {'email': email, 'code': code, 'new_password': newPassword},
+          timeout: _timeout);
+      if (resp.status != 200) {
+        throw ApiException(_detail(resp.text), statusCode: resp.status);
       }
     } on ApiException {
       rethrow;
-    } on SocketException {
-      throw const ApiException('Сервер авторизации недоступен. Проверьте сеть.');
     } on TimeoutException {
-      throw const ApiException('Сервер авторизации не отвечает.');
-    } finally {
-      client.close(force: true);
+      throw _noAnswer;
+    } on NetworkException {
+      throw _unavailable;
     }
   }
-
-  String get _base =>
-      baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
 
   static String _detail(String text) {
     try {
@@ -369,13 +323,13 @@ class PaymentsApi {
   final String baseUrl;
   PaymentsApi({String? baseUrl}) : baseUrl = baseUrl ?? defaultUrl();
 
-  static String defaultUrl() {
-    final env = Platform.environment['PP_PAYMENTS_URL']?.trim();
-    if (env != null && env.isNotEmpty) return env;
-    return 'http://193.233.193.12:8122';
-  }
+  static String defaultUrl() =>
+      envOrDefault('PP_PAYMENTS_URL', 'http://193.233.193.12:8122');
 
   static const _timeout = Duration(seconds: 8);
+  static const _unavailable =
+      ApiException('Сервер оплаты недоступен. Проверьте сеть.');
+  static const _noAnswer = ApiException('Сервер оплаты не отвечает.');
 
   String get _base =>
       baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
@@ -400,50 +354,37 @@ class PaymentsApi {
   }
 
   Future<Object?> _get(String path, String token) async {
-    final client = HttpClient()..connectionTimeout = _timeout;
     try {
-      final req =
-          await client.getUrl(Uri.parse('$_base$path')).timeout(_timeout);
-      req.headers.set('Authorization', 'Bearer $token');
-      final resp = await req.close().timeout(_timeout);
-      final text = await utf8.decodeStream(resp).timeout(_timeout);
-      if (resp.statusCode == 200) return jsonDecode(text);
-      throw ApiException(_detail(text), statusCode: resp.statusCode);
+      final resp = await httpJsonGet('$_base$path',
+          headers: {'Authorization': 'Bearer $token'}, timeout: _timeout);
+      if (resp.status == 200) return jsonDecode(resp.text);
+      throw ApiException(_detail(resp.text), statusCode: resp.status);
     } on ApiException {
       rethrow;
-    } on SocketException {
-      throw const ApiException('Сервер оплаты недоступен. Проверьте сеть.');
     } on TimeoutException {
-      throw const ApiException('Сервер оплаты не отвечает.');
-    } finally {
-      client.close(force: true);
+      throw _noAnswer;
+    } on NetworkException {
+      throw _unavailable;
     }
   }
 
   Future<Object?> _post(
       String path, String token, Map<String, dynamic> body) async {
-    final client = HttpClient()..connectionTimeout = _timeout;
     try {
-      final req = await client
-          .postUrl(Uri.parse('$_base$path'))
-          .timeout(_timeout);
-      req.headers.contentType = ContentType.json;
-      req.headers.set('Authorization', 'Bearer $token');
-      req.write(jsonEncode(body));
-      final resp = await req.close().timeout(_timeout);
-      final text = await utf8.decodeStream(resp).timeout(_timeout);
-      if (resp.statusCode == 200) {
-        return text.isEmpty ? null : jsonDecode(text);
+      final resp = await httpJsonPost('$_base$path',
+          headers: {'Authorization': 'Bearer $token'},
+          json: body,
+          timeout: _timeout);
+      if (resp.status == 200) {
+        return resp.text.isEmpty ? null : jsonDecode(resp.text);
       }
-      throw ApiException(_detail(text), statusCode: resp.statusCode);
+      throw ApiException(_detail(resp.text), statusCode: resp.status);
     } on ApiException {
       rethrow;
-    } on SocketException {
-      throw const ApiException('Сервер оплаты недоступен. Проверьте сеть.');
     } on TimeoutException {
-      throw const ApiException('Сервер оплаты не отвечает.');
-    } finally {
-      client.close(force: true);
+      throw _noAnswer;
+    } on NetworkException {
+      throw _unavailable;
     }
   }
 

@@ -1,13 +1,12 @@
 /// Компоновка отчёта ТЭО (русский, A4) в PDF через [PdfDocument].
 ///
-/// Кириллица рисуется внедрённым TTF (arial.ttf / DejaVuSans.ttf,
-/// см. [fontPathForCyrillic]). Если шрифт не найден — бросается исключение
-/// с русским текстом; транслитерация ([translitRus]) зарезервирована как
-/// документированный fallback для окружений без кириллических TTF.
+/// Кириллица рисуется внедрённым TTF (arial.ttf / DejaVuSans.ttf). Байты
+/// шрифта передаёт вызывающий: на desktop их находит io-фасад
+/// (lib/io.dart, [fontPathForCyrillic]), на web — встроенный ассет.
 library;
 
-import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'pdf_writer.dart';
 import 'report_models.dart';
@@ -77,18 +76,13 @@ String _date(DateTime d) {
 /// Формат вывода: деньги — 2 знака; время — как хранится (4 знака);
 /// площадь — до 5 значащих (raw double). Для страницы отчёта.
 ///
-/// Генерация PDF-отчёта ТЭО.
-void writeTeoReportPdf(String outPath, TeoReportData data) {
-  final path = fontPathForCyrillic();
-  if (path == null) {
-    throw StateError('Не найден TTF-шрифт с кириллицей '
-        '(arial.ttf/DejaVuSans.ttf) для PDF-отчёта');
-  }
-  final fontBytes = File(path).readAsBytesSync();
+/// Генерация PDF-отчёта ТЭО (чистая функция: байты → байты).
+/// [fontBytes] — TTF с кириллицей (см. [parseTtfFont]).
+Uint8List buildTeoReportPdf(TeoReportData data, List<int> fontBytes) {
   final font = parseTtfFont(fontBytes, name: 'PrepressCyrillic');
   final doc = PdfDocument(font);
   _layout(doc, data);
-  File(outPath).writeAsBytesSync(doc.build());
+  return doc.build();
 }
 
 // ============================================================

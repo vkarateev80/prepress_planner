@@ -39,3 +39,11 @@ Thumbs.db
 
 # ── DSH / служебное ──
 .dsh/
+/.dsh-tmp/
+/pp-new-server-stack.tar.gz
+
+# ── Пользовательские данные (никогда не коммитить) ──
+/app/projects/
+/app/state/
+/packages/core/pubspec.lock
+/test/

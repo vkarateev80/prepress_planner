@@ -13,6 +13,7 @@
 // 2 контуров одинакового размера «массивом»: is_array=True, count=2,
 // rows=cols=1 (вырожденный 1x1, смещения ~0). Порт 1:1 обязан это повторять.
 import '../tool/test_utils.dart';
+import '../lib/io.dart';
 import '../lib/src/parser/dxf_parser.dart';
 import '../lib/src/parser/svg_parser.dart';
 import '../lib/src/parser/pdf_parser.dart';

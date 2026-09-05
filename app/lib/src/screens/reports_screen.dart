@@ -1,15 +1,25 @@
 /// Экран «Отчёты»: экспорт PDF/XLSX/DXF.
+///
+/// Генерация — чистыми функциями ядра (buildTeoReportPdf/buildTeoXlsx/
+/// buildDxfText) через [heavy]: на desktop в изоляте, на web на главном
+/// потоке. Сохранение — платформенное [saveReport]: desktop пишет файлы в
+/// выбранную папку, web скачивает браузером. Кириллица PDF — встроенный
+/// шрифт assets/fonts/DejaVuSans.ttf (rootBundle).
 library;
 
-import 'dart:isolate';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:prepress_core/prepress_core.dart';
 
+import '../../platform/env.dart';
+import '../../platform/isolates.dart';
+import '../../platform/save_out.dart';
 import '../logs/app_log.dart';
 import '../projects/project.dart';
 
-/// Экспорт отчётов в изоляте через топ-левел функции: замыкание создаётся в
+/// Экспорт в тяжелом вызове через топ-левел функции: замыкание создаётся в
 /// своей активации и не захватывает состояние экрана (иначе VM делит контекст
 /// с setState-замыканием, отправка падает как unsendable).
 
@@ -44,25 +54,17 @@ TeoReportData _buildReportData(Project project) {
   );
 }
 
-Future<void> _isolateWritePdf(Project project, String outDir) =>
-    Isolate.run(() {
-      final data = _buildReportData(project);
-      writeTeoReportPdf('$outDir/04_ТЭО_Отчёт.pdf', data);
-    });
+Future<Uint8List> _buildPdfBytes(Project project, Uint8List fontBytes) =>
+    heavy(() => buildTeoReportPdf(_buildReportData(project), fontBytes));
 
-Future<void> _isolateWriteXlsx(Project project, String outDir) =>
-    Isolate.run(() {
-      final data = _buildReportData(project);
-      writeTeoXlsx('$outDir/05_Расчёт.xlsx', data);
-    });
+Future<Uint8List> _buildXlsxBytes(Project project) =>
+    heavy(() => buildTeoXlsx(_buildReportData(project)));
 
-Future<void> _isolateWriteDxf(Project project, String outDir) =>
-    Isolate.run(() {
-      writeDxf('$outDir/02_Вылеченный_Мастер.dxf', project.healedPaths);
-      if (project.arrayPaths.isNotEmpty) {
-        writeDxf('$outDir/03_Раскрой.dxf', project.arrayPaths);
-      }
-    });
+Future<String> _buildMasterDxfText(Project project) =>
+    heavy(() => buildDxfText(project.healedPaths));
+
+Future<String> _buildArrayDxfText(Project project) =>
+    heavy(() => buildDxfText(project.arrayPaths));
 
 class ReportsScreen extends StatefulWidget {
   final Project? project;
@@ -77,12 +79,35 @@ class _ReportsScreenState extends State<ReportsScreen> {
   bool _busy = false;
   String _status = '';
 
+  /// Байты кириллического TTF для PDF (assets/fonts/DejaVuSans.ttf).
+  Uint8List? _fontBytes;
+
+  /// Каталог записи на desktop (на web игнорируется — браузерный download).
   String get _outDir =>
       widget.store.directory.isEmpty ? '.' : widget.store.directory;
 
   /// Запись в журнал приложения (окно «Журнал событий» в шапке).
   void _log(String message, {LogLevel level = LogLevel.info}) =>
       AppLog.instance.record('Отчёты', message, level: level);
+
+  @override
+  void initState() {
+    super.initState();
+    _loadFont();
+  }
+
+  Future<void> _loadFont() async {
+    try {
+      final data =
+          await rootBundle.load('assets/fonts/DejaVuSans.ttf');
+      final bytes = data.buffer
+          .asUint8List(data.offsetInBytes, data.lengthInBytes);
+      if (mounted) setState(() => _fontBytes = bytes);
+    } catch (e) {
+      _log('Не удалось загрузить кириллический шрифт для PDF: $e',
+          level: LogLevel.error);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -94,8 +119,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        Text('Экспорт в папку: $_outDir',
-            style: Theme.of(context).textTheme.bodySmall),
+        Text(
+          isWeb
+              ? 'Экспорт: файлы будут скачаны браузером'
+              : 'Экспорт в папку: $_outDir',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
         const SizedBox(height: 16),
         if (_busy) const LinearProgressIndicator(),
         if (_status.isNotEmpty) ...[
@@ -133,11 +162,18 @@ class _ReportsScreenState extends State<ReportsScreen> {
       _status = 'Формирование PDF…';
     });
     try {
-      await _isolateWritePdf(project, _outDir);
-      if (mounted) {
-        setState(() => _status = 'PDF сохранён: $_outDir/04_ТЭО_Отчёт.pdf');
+      final font = _fontBytes;
+      if (font == null) {
+        throw StateError('Кириллический шрифт не загружен (assets/fonts/'
+            'DejaVuSans.ttf)');
       }
-      _log('PDF сохранён: $_outDir/04_ТЭО_Отчёт.pdf');
+      final pdf = await _buildPdfBytes(project, font);
+      final where = await saveReport(_outDir, '04_ТЭО_Отчёт.pdf', pdf);
+      if (mounted) {
+        setState(() => _status =
+            isWeb ? 'Экспортировано: 04_ТЭО_Отчёт.pdf' : 'PDF сохранён: $where');
+      }
+      _log(isWeb ? 'Экспортировано: 04_ТЭО_Отчёт.pdf' : 'PDF сохранён: $where');
     } catch (e) {
       if (mounted) setState(() => _status = 'Ошибка PDF: $e');
       _log('Ошибка PDF: $e', level: LogLevel.error);
@@ -153,11 +189,13 @@ class _ReportsScreenState extends State<ReportsScreen> {
       _status = 'Формирование XLSX…';
     });
     try {
-      await _isolateWriteXlsx(project, _outDir);
+      final xlsx = await _buildXlsxBytes(project);
+      final where = await saveReport(_outDir, '05_Расчёт.xlsx', xlsx);
       if (mounted) {
-        setState(() => _status = 'XLSX сохранён: $_outDir/05_Расчёт.xlsx');
+        setState(() => _status =
+            isWeb ? 'Экспортировано: 05_Расчёт.xlsx' : 'XLSX сохранён: $where');
       }
-      _log('XLSX сохранён: $_outDir/05_Расчёт.xlsx');
+      _log(isWeb ? 'Экспортировано: 05_Расчёт.xlsx' : 'XLSX сохранён: $where');
     } catch (e) {
       if (mounted) setState(() => _status = 'Ошибка XLSX: $e');
       _log('Ошибка XLSX: $e', level: LogLevel.error);
@@ -173,11 +211,21 @@ class _ReportsScreenState extends State<ReportsScreen> {
       _status = 'Формирование DXF…';
     });
     try {
-      await _isolateWriteDxf(project, _outDir);
-      if (mounted) {
-        setState(() => _status = 'DXF сохранены в $_outDir');
+      final master = await _buildMasterDxfText(project);
+      final names = <String>['02_Вылеченный_Мастер.dxf'];
+      await saveReport(_outDir, '02_Вылеченный_Мастер.dxf',
+          Uint8List.fromList(utf8.encode(master)));
+      if (project.arrayPaths.isNotEmpty) {
+        final arr = await _buildArrayDxfText(project);
+        names.add('03_Раскрой.dxf');
+        await saveReport(_outDir, '03_Раскрой.dxf',
+            Uint8List.fromList(utf8.encode(arr)));
       }
-      _log('DXF сохранены в $_outDir');
+      final statusText = isWeb
+          ? 'Экспортировано: ${names.join(', ')}'
+          : 'DXF сохранены в $_outDir';
+      if (mounted) setState(() => _status = statusText);
+      _log(statusText);
     } catch (e) {
       if (mounted) setState(() => _status = 'Ошибка DXF: $e');
       _log('Ошибка DXF: $e', level: LogLevel.error);

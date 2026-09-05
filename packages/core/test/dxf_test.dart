@@ -1,5 +1,6 @@
 // Тесты DXF-парсера (эталон: ezdxf make_path + flattening, cam_pipeline).
 import '../tool/test_utils.dart';
+import '../lib/io.dart';
 import '../lib/src/parser/dxf_parser.dart';
 import '../lib/src/model/cam_path.dart';
 import '../lib/src/model/vec2.dart';

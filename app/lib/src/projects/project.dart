@@ -2,9 +2,10 @@
 library;
 
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:prepress_core/prepress_core.dart';
+
+import '../../platform/json_store.dart';
 
 /// Сериализация CamPath: {points: [[x,y],...], closed, layer}.
 Map<String, dynamic> camPathToJson(CamPath p) => {
@@ -287,39 +288,30 @@ MaterialResult materialResultFromJson(Map<String, dynamic> j) {
   );
 }
 
-/// Простое хранилище проектов: каталог + JSON-файлы.
+/// Простое хранилище проектов: JSON-файлы (desktop) / localStorage (web).
 class ProjectStore {
+  /// Имя каталога/префикса хранилища (для UI и сообщений).
   final String directory;
-  ProjectStore(this.directory);
-
-  String _fileFor(String name) =>
-      '$directory/${_sanitize(name)}.json';
+  final JsonStore _store;
+  ProjectStore(String directory)
+      : directory = directory,
+        _store = JsonStore(directory);
 
   static String _sanitize(String s) =>
       s.replaceAll(RegExp(r'[^\w\-\u0400-\u04FF ]'), '_').trim();
 
+  String _relFor(String name) => '${_sanitize(name)}.json';
+
   Future<void> save(Project p) async {
-    final f = _fileFor(p.name);
-    await File(f).parent.create(recursive: true);
-    await File(f).writeAsString(jsonEncode(p.toJson()), flush: true);
+    await _store.write(_relFor(p.name), jsonEncode(p.toJson()));
   }
 
   Future<Project?> load(String name) async {
-    final f = _fileFor(name);
-    if (!await File(f).exists()) return null;
-    final j = jsonDecode(await File(f).readAsString());
+    final s = await _store.read(_relFor(name));
+    if (s == null) return null;
+    final j = jsonDecode(s);
     return Project.fromJson((j as Map).cast<String, dynamic>());
   }
 
-  Future<List<String>> listNames() async {
-    final d = Directory(directory);
-    if (!await d.exists()) return [];
-    return d
-        .listSync()
-        .whereType<File>()
-        .where((f) => f.path.endsWith('.json'))
-        .map((f) => f.path.split(RegExp(r'[/\\]')).last
-            .replaceAll(RegExp(r'\.json$'), ''))
-        .toList();
-  }
+  Future<List<String>> listNames() async => _store.listJsonNames();
 }

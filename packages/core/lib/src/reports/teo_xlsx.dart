@@ -1,8 +1,8 @@
 /// Сборка книги XLSX из [TeoReportData]: листы «Расчёт», «ТЭО», «Варианты».
 library;
 
-import 'dart:io';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'xlsx_writer.dart';
 import 'report_models.dart';
@@ -189,11 +189,12 @@ List<List<_Cell>> _sheetVariants(TeoReportData d) {
 }
 
 // ============================================================
-// Запись файла
+// Сборка файла
 // ============================================================
 
-/// Пишет книгу XLSX (store-zip) из данных отчёта ТЭО.
-void writeTeoXlsx(String outPath, TeoReportData data) {
+/// Книга XLSX (store-zip) из данных отчёта ТЭО — байты (чистая функция).
+/// Файл на диск пишет io-фасад (lib/io.dart).
+Uint8List buildTeoXlsx(TeoReportData data) {
   final entries = <ZipEntry>[
     ZipEntry('[Content_Types].xml', utf8.encode(_contentTypes())),
     ZipEntry('_rels/.rels', utf8.encode(_rootRels())),
@@ -206,5 +207,5 @@ void writeTeoXlsx(String outPath, TeoReportData data) {
     ZipEntry('xl/worksheets/sheet3.xml',
         utf8.encode(_sheetXml(_sheetVariants(data)))),
   ];
-  File(outPath).writeAsBytesSync(buildZip(entries));
+  return buildZip(entries);
 }

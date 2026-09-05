@@ -21,3 +21,8 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  # Кириллический TTF для PDF-отчётов (web не видит файловой системы —
+  # шрифт грузится через rootBundle; на desktop тоже можно единообразно).
+  assets:
+    - assets/fonts/DejaVuSans.ttf

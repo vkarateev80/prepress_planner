@@ -18,7 +18,8 @@ class _FakeConverter implements Converter {
   String get baseUrl => 'http://fake:8120';
 
   @override
-  Future<Uint8List> convertToSvg(File source) async {
+  Future<Uint8List> convertToSvg(
+      {required String fileName, required Uint8List bytes}) async {
     called = true;
     // Конвертер вернул «SVG»; разбор подменён parseOverride — контент не важен.
     return Uint8List.fromList('<svg/>'.codeUnits);

@@ -7,6 +7,8 @@
 /// (порт cam_pipeline ai_parser.py: попытка 1 — PDF-поток, дальше движки).
 library;
 
+import 'dart:typed_data';
+
 import 'base_parser.dart';
 import 'parser_exception.dart';
 import 'pdf_parser.dart';
@@ -15,9 +17,9 @@ import '../model/cam_path.dart';
 
 class AiPdfParser extends BaseParser {
   @override
-  List<CamPath> parse(String filePath) {
-    if (isPdfCompatible(filePath)) {
-      return PdfParser().parse(filePath);
+  List<CamPath> parseBytes(Uint8List bytes) {
+    if (isPdfBytes(bytes)) {
+      return PdfParser().parseBytes(bytes);
     }
     throw ParserException(
         'AI без PDF-совместимости: требуется серверная конвертация.');

@@ -1,5 +1,6 @@
 // Тесты диспетчера parseFile + AI-парсера (контракт аг.02).
 import '../tool/test_utils.dart';
+import '../lib/io.dart';
 import '../lib/src/parser/parse_file.dart';
 import '../lib/src/parser/ai_pdf_parser.dart';
 import '../lib/src/parser/parser_exception.dart';

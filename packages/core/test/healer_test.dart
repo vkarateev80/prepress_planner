@@ -2,6 +2,7 @@
 import 'dart:io';
 
 import '../tool/test_utils.dart';
+import '../lib/io.dart';
 import '../lib/src/parser/dxf_parser.dart';
 import '../lib/src/healer/morphology.dart';
 import '../lib/src/optimizer/topology.dart';

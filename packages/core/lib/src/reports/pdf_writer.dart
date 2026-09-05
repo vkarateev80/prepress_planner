@@ -10,72 +10,9 @@
 /// скобок/обратных слэшей не требуется вовсе.
 library;
 
-import 'dart:io';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:math' as math;
-
-// ============================================================
-// Поиск TTF с кириллицей
-// ============================================================
-
-/// Возвращает путь к TTF-шрифту с кириллицей либо null.
-/// Порядок поиска: arial.ttf (Windows), затем DejaVuSans.ttf — в системных
-/// каталогах, в каталоге пользователя Windows и рядом с проектом.
-String? fontPathForCyrillic() {
-  const system = r'C:\Windows\Fonts';
-  const userFonts = r'%LOCALAPPDATA%\Microsoft\Windows\Fonts';
-  final candidates = <String>[
-    '$system\\arial.ttf',
-    '$system\\DejaVuSans.ttf',
-    '$system\\dejavusans.ttf',
-  ];
-  // Каталог шрифтов пользователя (Windows 10+): раскрываем %LOCALAPPDATA%.
-  final localAppData = Platform.environment['LOCALAPPDATA'];
-  if (localAppData != null && localAppData.isNotEmpty) {
-    candidates.add('$localAppData\\Microsoft\\Windows\\Fonts\\DejaVuSans.ttf');
-    candidates.add('$localAppData\\Microsoft\\Windows\\Fonts\\dejavusans.ttf');
-  }
-  for (final c in candidates) {
-    try {
-      if (File(c).existsSync()) return c;
-    } catch (_) {/* путь невалиден — пропускаем */}
-  }
-
-  // «Рядом с проектом»: ограниченный обход текущего дерева (глубина 4,
-  // без venv/node_modules) в поисках DejaVuSans.ttf / arial.ttf.
-  const depthLimit = 4;
-  final hits = <String>[];
-  void walk(Directory dir, int depth) {
-    if (depth > depthLimit || hits.isNotEmpty) return;
-    List<FileSystemEntity> entries;
-    try {
-      entries = dir.listSync(followLinks: false);
-    } catch (_) {
-      return;
-    }
-    for (final e in entries) {
-      if (e is Directory) {
-        final n = e.path.split(Platform.pathSeparator).last.toLowerCase();
-        if (n == 'venv' || n == 'node_modules' || n == '.git' ||
-            n == 'build' || n == '.dart_tool') {
-          continue;
-        }
-        walk(e, depth + 1);
-      } else if (e is File) {
-        final n = e.path.split(Platform.pathSeparator).last.toLowerCase();
-        if (n == 'dejavusans.ttf' || n == 'arial.ttf') {
-          hits.add(e.path);
-        }
-      }
-      if (hits.isNotEmpty) return;
-    }
-  }
-
-  walk(Directory.current, 0);
-  if (hits.isNotEmpty) return hits.first;
-  return null;
-}
 
 // ============================================================
 // Парсинг TTF: таблицы head/hhea/maxp/hmtx/cmap

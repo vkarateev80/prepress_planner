@@ -113,7 +113,9 @@ void main() {
     final f = await _aiFile(dir, 'bad.txt');
     final api = ConverterApi(baseUrl: 'http://127.0.0.1:1');
     await expectLater(
-      api.convertToSvg(f),
+      api.convertToSvg(
+          fileName: f.path.split(RegExp(r'[\\/]')).last,
+          bytes: await f.readAsBytes()),
       throwsA(isA<ConverterException>().having(
           (e) => e.message, 'message', contains('не конвертируется'))),
     );
@@ -128,7 +130,9 @@ void main() {
         baseUrl: server.baseUrl,
         pollInterval: const Duration(milliseconds: 5),
         timeout: const Duration(seconds: 5));
-    final svg = await api.convertToSvg(f);
+    final svg = await api.convertToSvg(
+        fileName: f.path.split(RegExp(r'[\\/]')).last,
+        bytes: await f.readAsBytes());
 
     // Результат — байты SVG с сервера.
     expect(utf8.decode(svg), '<svg>результат</svg>');
@@ -153,7 +157,9 @@ void main() {
     final f = await _aiFile(dir);
     final api = ConverterApi(baseUrl: server.baseUrl);
     await expectLater(
-      api.convertToSvg(f),
+      api.convertToSvg(
+          fileName: f.path.split(RegExp(r'[\\/]')).last,
+          bytes: await f.readAsBytes()),
       throwsA(isA<ConverterException>().having((e) => e.message, 'message',
           contains('не поддерживается'))),
     );
@@ -168,7 +174,9 @@ void main() {
     final f = await _aiFile(dir);
     final api = ConverterApi(baseUrl: server.baseUrl);
     await expectLater(
-      api.convertToSvg(f),
+      api.convertToSvg(
+          fileName: f.path.split(RegExp(r'[\\/]')).last,
+          bytes: await f.readAsBytes()),
       throwsA(isA<ConverterException>().having((e) => e.message, 'message',
           contains('Не удалось разобрать файл'))),
     );
@@ -184,7 +192,9 @@ void main() {
         pollInterval: const Duration(milliseconds: 5),
         timeout: const Duration(milliseconds: 150));
     await expectLater(
-      api.convertToSvg(f),
+      api.convertToSvg(
+          fileName: f.path.split(RegExp(r'[\\/]')).last,
+          bytes: await f.readAsBytes()),
       throwsA(isA<ConverterException>()
           .having((e) => e.message, 'message', contains('не завершилась'))),
     );

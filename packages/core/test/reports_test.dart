@@ -9,6 +9,7 @@ import 'dart:io';
 import 'dart:convert';
 
 import '../tool/test_utils.dart';
+import '../lib/io.dart';
 import '../lib/src/model/params.dart';
 import '../lib/src/model/cam_path.dart';
 import '../lib/src/model/vec2.dart';

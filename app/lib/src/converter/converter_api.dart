@@ -1,8 +1,8 @@
 /// HTTP-клиент к сервису конвертации закрытых форматов.
 ///
 /// services/converter (FastAPI): AI/CDR/EPS → SVG/PDF. Внешних pub-пакетов
-/// нет (правило проекта), поэтому multipart/form-data собирается вручную
-/// на dart:io. Контракт сервиса:
+/// нет: общий HTTP-слой платформы (dart:io / XHR). Файл передаётся БАЙТАМИ
+/// (на web файловой системы нет). Контракт сервиса:
 ///   POST /convert         multipart: file + target(svg|pdf) → {job_id}
 ///   GET  /convert/{id}    → {status: pending|running|done|error,
 ///                            result_url, error}
@@ -11,8 +11,10 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:typed_data';
+
+import '../../platform/env.dart';
+import '../../platform/http.dart';
 
 /// Ошибка конвертации с русским сообщением для UI.
 class ConverterException implements Exception {
@@ -28,7 +30,10 @@ abstract class Converter {
   String get baseUrl;
 
   /// Конвертирует закрытый формат (AI/CDR/EPS) в SVG и возвращает байты.
-  Future<Uint8List> convertToSvg(File source);
+  /// [fileName] — имя исходного файла (по расширению определяется формат),
+  /// [bytes] — содержимое файла.
+  Future<Uint8List> convertToSvg(
+      {required String fileName, required Uint8List bytes});
 }
 
 /// Реальный клиент к services/converter (FastAPI, порт 8120).
@@ -48,125 +53,96 @@ class ConverterApi implements Converter {
     this.timeout = const Duration(seconds: 180),
   }) : baseUrl = baseUrl ?? defaultBaseUrl();
 
-  /// Адрес по умолчанию: env PP_CONVERTER_URL либо VPS-сервер конвертации.
-  static String defaultBaseUrl() {
-    final env = Platform.environment['PP_CONVERTER_URL'];
-    if (env != null && env.trim().isNotEmpty) return env.trim();
-    return 'http://193.233.193.12:8120';
-  }
+  /// Адрес по умолчанию: env PP_CONVERTER_URL (desktop), на web — тот же
+  /// origin (проксирование /converter на VPS).
+  static String defaultBaseUrl() =>
+      envOrDefault('PP_CONVERTER_URL', 'http://193.233.193.12:8120');
 
   static const _closedExts = {'.ai', '.cdr', '.eps'};
 
-  /// Поддерживает ли путь закрытый формат (AI/CDR/EPS).
-  static bool isClosedFormat(String path) {
-    final i = path.lastIndexOf('.');
+  /// Поддерживает ли имя файла закрытый формат (AI/CDR/EPS).
+  static bool isClosedFormat(String fileName) {
+    final i = fileName.lastIndexOf('.');
     if (i < 0) return false;
-    return _closedExts.contains(path.substring(i).toLowerCase());
+    return _closedExts.contains(fileName.substring(i).toLowerCase());
   }
 
   static const _reqTimeout = Duration(seconds: 30);
 
   @override
-  Future<Uint8List> convertToSvg(File source) async {
-    final ext = _sourceExt(source.path);
+  Future<Uint8List> convertToSvg(
+      {required String fileName, required Uint8List bytes}) async {
+    final ext = _sourceExt(fileName);
     if (!_closedExts.contains(ext)) {
       throw ConverterException(
           'Формат «$ext» не конвертируется: допустимы AI, CDR, EPS.');
     }
-    final boundary = '----pp_${DateTime.now().microsecondsSinceEpoch}';
-    final body = await _multipartBody(source, ext, boundary);
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 10);
     final deadline = DateTime.now().add(timeout);
     try {
-      final jobId =
-          await _postJob(client, body, boundary, deadline, source.path);
-      final resultUrl = await _pollJob(client, jobId, deadline);
-      return await _download(client, resultUrl, deadline);
+      final jobId = await _postJob(bytes, ext, deadline, fileName);
+      final resultUrl = await _pollJob(jobId, deadline);
+      return await _download(resultUrl, deadline);
     } on ConverterException {
       rethrow;
     } on TimeoutException {
       throw const ConverterException(
           'Сервер конвертации не отвечает (превышено время ожидания запроса).');
-    } on SocketException catch (e) {
+    } on NetworkException catch (e) {
       throw ConverterException(
-          'Сервис конвертации недоступен: '
-          '${e.osError?.message ?? e.message}. '
+          'Сервис конвертации недоступен: ${e.message}. '
           'Проверьте подключение к серверу конвертации.');
-    } on HttpException catch (e) {
-      throw ConverterException('Ошибка HTTP при обращении к серверу: ${e.message}');
-    } finally {
-      client.close(force: true);
     }
   }
 
-  static String _sourceExt(String path) {
-    final i = path.lastIndexOf('.');
-    return i < 0 ? '' : path.substring(i).toLowerCase();
+  static String _sourceExt(String fileName) {
+    final i = fileName.lastIndexOf('.');
+    return i < 0 ? '' : fileName.substring(i).toLowerCase();
   }
 
-  Uri _uri(String path) {
-    final base = baseUrl.endsWith('/')
+  String _base() {
+    final b = baseUrl.endsWith('/')
         ? baseUrl.substring(0, baseUrl.length - 1)
         : baseUrl;
-    return Uri.parse('$base$path');
+    return b;
   }
 
-  Future<Uint8List> _multipartBody(
-      File source, String ext, String boundary) async {
-    final fileBytes = await source.readAsBytes();
-    final head = utf8.encode(
-        '--$boundary\r\n'
-        'Content-Disposition: form-data; name="file"; '
-        'filename="import$ext"\r\n'
-        'Content-Type: application/octet-stream\r\n\r\n');
-    final tail = utf8.encode(
-        '\r\n--$boundary\r\n'
-        'Content-Disposition: form-data; name="target"\r\n\r\n'
-        'svg\r\n--$boundary--\r\n');
-    final builder = BytesBuilder(copy: false)
-      ..add(head)
-      ..add(fileBytes)
-      ..add(tail);
-    return builder.takeBytes();
-  }
-
-  void _checkDeadline(DateTime deadline, String fileName) {
+  void _checkDeadline(DateTime deadline, String what) {
     if (DateTime.now().isAfter(deadline)) {
       throw ConverterException(
-          'Конвертация «$fileName» не завершилась за ${timeout.inSeconds} с. '
+          'Конвертация «$what» не завершилась за ${timeout.inSeconds} с. '
           'Проверьте сервер конвертации и повторите.');
     }
   }
 
-  Future<String> _postJob(HttpClient client, Uint8List body,
-      String boundary, DateTime deadline, String fileName) async {
+  Future<String> _postJob(Uint8List bytes, String ext, DateTime deadline,
+      String fileName) async {
     _checkDeadline(deadline, fileName);
-    final req = await client.postUrl(_uri('/convert')).timeout(_reqTimeout);
-    req.headers.set(HttpHeaders.contentTypeHeader,
-        'multipart/form-data; boundary=$boundary');
-    req.headers.set(HttpHeaders.contentLengthHeader, body.length);
-    req.add(body);
-    final resp = await req.close().timeout(_reqTimeout);
-    final text = await utf8.decodeStream(resp).timeout(_reqTimeout);
+    // Имя «import$ext» как раньше: серверу важно расширение файлового поля.
+    final base = _base();
+    final resp = await httpMultipartPost('$base/convert',
+        fieldName: 'file',
+        fileName: 'import$ext',
+        fileBytes: bytes,
+        fields: const {'target': 'svg'},
+        timeout: _reqTimeout);
+    final text = resp.text;
     final j = _tryJson(text);
-    if (resp.statusCode == 200 && j is Map && j['job_id'] is String) {
+    if (resp.status == 200 && j is Map && j['job_id'] is String) {
       return j['job_id'] as String;
     }
     // FastAPI возвращает детали в {"detail": ...} (строка или список).
-    if (resp.statusCode == 200 || resp.statusCode >= 500) {
+    if (resp.status == 200 || resp.status >= 500) {
       throw ConverterException(
-          'Сервер не принял задачу (${resp.statusCode}): ${_detail(text)}');
+          'Сервер не принял задачу (${resp.status}): ${_detail(text)}');
     }
     throw ConverterException(
-        'Сервер отклонил файл (${resp.statusCode}): ${_detail(text)}');
+        'Сервер отклонил файл (${resp.status}): ${_detail(text)}');
   }
 
-  Future<String> _pollJob(
-      HttpClient client, String jobId, DateTime deadline) async {
+  Future<String> _pollJob(String jobId, DateTime deadline) async {
     while (true) {
       _checkDeadline(deadline, jobId);
-      final j = await _jsonGet(client, '/convert/$jobId');
+      final j = await _jsonGet('/convert/$jobId');
       final status = j['status'];
       if (status == 'done') {
         final url = j['result_url'];
@@ -188,16 +164,14 @@ class ConverterApi implements Converter {
     }
   }
 
-  Future<Map<String, dynamic>> _jsonGet(
-      HttpClient client, String path) async {
-    final req = await client.getUrl(_uri(path)).timeout(_reqTimeout);
-    final resp = await req.close().timeout(_reqTimeout);
-    final text = await utf8.decodeStream(resp).timeout(_reqTimeout);
-    if (resp.statusCode != 200) {
+  Future<Map<String, dynamic>> _jsonGet(String path) async {
+    final base = _base();
+    final resp = await httpJsonGet('$base$path', timeout: _reqTimeout);
+    if (resp.status != 200) {
       throw ConverterException(
-          'Сервер ответил ошибкой (${resp.statusCode}): ${_detail(text)}');
+          'Сервер ответил ошибкой (${resp.status}): ${_detail(resp.text)}');
     }
-    final j = _tryJson(text);
+    final j = _tryJson(resp.text);
     if (j is! Map<String, dynamic>) {
       throw const ConverterException(
           'Некорректный ответ сервера конвертации.');
@@ -205,22 +179,24 @@ class ConverterApi implements Converter {
     return j;
   }
 
-  Future<Uint8List> _download(
-      HttpClient client, String resultUrl, DateTime deadline) async {
+  /// Скачивание результата: [resultUrl] может быть абсолютным или
+  /// относительным (в т.ч. '/data/out/...' при проксировании одним origin).
+  Future<Uint8List> _download(String resultUrl, DateTime deadline) async {
     _checkDeadline(deadline, resultUrl);
-    final req = await client.getUrl(_uri(resultUrl)).timeout(_reqTimeout);
-    final resp = await req.close().timeout(_reqTimeout);
-    if (resp.statusCode != 200) {
-      final text = await utf8.decodeStream(resp).timeout(_reqTimeout);
+    final low = resultUrl.toLowerCase();
+    final base = _base();
+    final full = low.startsWith('http://') || low.startsWith('https://')
+        ? resultUrl
+        : resultUrl.startsWith('/')
+            ? '$base$resultUrl'
+            : '$base/$resultUrl';
+    final resp = await httpRawGet(full, timeout: _reqTimeout);
+    if (resp.status != 200) {
       throw ConverterException(
-          'Не удалось скачать результат (${resp.statusCode}): '
-          '${_detail(text)}');
+          'Не удалось скачать результат (${resp.status}): '
+          '${_detail(resp.text)}');
     }
-    final builder = BytesBuilder(copy: false);
-    await for (final chunk in resp) {
-      builder.add(chunk);
-    }
-    return builder.takeBytes();
+    return resp.body;
   }
 
   static Object? _tryJson(String text) {

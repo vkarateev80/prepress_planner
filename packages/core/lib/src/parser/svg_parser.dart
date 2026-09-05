@@ -6,9 +6,9 @@
 /// Слой всех контуров — 'SVG_VECTOR' (как в Python-эталоне).
 library;
 
-import 'dart:io';
 import 'dart:math' as math;
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'base_parser.dart';
 import 'parser_exception.dart';
@@ -19,17 +19,8 @@ const double _pxToMm = 25.4 / 96.0;
 
 class SvgParser extends BaseParser {
   @override
-  List<CamPath> parse(String filePath) {
-    final f = File(filePath);
-    if (!f.existsSync()) {
-      throw ParserException('Файл не найден: $filePath');
-    }
-    late String text;
-    try {
-      text = f.readAsStringSync();
-    } catch (e) {
-      throw ParserException('Ошибка при чтении SVG: $e');
-    }
+  List<CamPath> parseBytes(Uint8List bytes) {
+    final text = utf8.decode(bytes, allowMalformed: true);
 
     final root = _parseXml(text);
     if (root == null) {

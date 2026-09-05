@@ -7,12 +7,14 @@
 library;
 
 import 'dart:async';
-import 'dart:io';
-import 'dart:isolate';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:prepress_core/prepress_core.dart';
 
+import '../../platform/env.dart';
+import '../../platform/files.dart';
+import '../../platform/isolates.dart';
 import '../converter/converter_api.dart';
 import '../converter/converter_server.dart';
 import '../logs/app_log.dart';
@@ -23,35 +25,57 @@ import '../widgets/geometry_canvas.dart';
 /// которого импорт прерывается с понятной ошибкой вместо «вечной загрузки».
 const _fileTimeout = Duration(seconds: 90);
 
-/// Тяжёлые операции домена в изоляте. Только топ-левел функции: замыкание,
-/// уходящее в изолят, создаётся в собственной активации и не захватывает
-/// состояние экрана (иначе VM делит контекст активации с setState-замыканием,
-/// и отправка падает: «object is unsendable»).
+/// Тяжёлые операции домена: только топ-левел функции (замыкание, уходящее
+/// в изолят, создаётся в собственной активации и не захватывает состояние
+/// экрана — иначе VM делит контекст активации с setState-замыканием, и
+/// отправка падает: «object is unsendable»). На desktop [heavy] выполняется
+/// в изоляте (Isolate.run), на web — на главном потоке (изолятов в браузере
+/// нет).
 
-/// Только разбор файла (SVG/DXF/PDF) — без анализа; анализ отдельным шагом,
-/// чтобы в статусе было видно, что происходит, а не «вечная загрузка».
-Future<List<CamPath>> _isolateParseOnly(String filePath) =>
-    Isolate.run(() => parseFile(filePath));
+/// Выбранный пользователем файл импорта: имя (по нему определяется формат),
+/// байты содержимого и строка для Project.inputFile (desktop — полный путь,
+/// web — имя файла).
+class _ImportFile {
+  final String name;
+  final Uint8List bytes;
+  final String display;
+  const _ImportFile({
+    required this.name,
+    required this.bytes,
+    required this.display,
+  });
+}
 
-Future<List<CamPath>> _isolateHeal(List<CamPath> raw) =>
-    Isolate.run(() => healGeometry(raw, ManufacturingParams()));
+/// Имя файла из полного пути (часть после последнего «/» или «\»).
+String _pathBase(String path) {
+  final parts = path.split(RegExp(r'[\\/]'));
+  return parts.isEmpty ? path : parts.last;
+}
 
-Future<List<Issue>> _isolateAnalyze(List<CamPath> healed) => Isolate.run(
+/// Только разбор байтов файла (SVG/DXF/PDF/AI) — без анализа; анализ идёт
+/// отдельным шагом, чтобы в статусе было видно происходящее.
+Future<List<CamPath>> _parseBytesHeavy(String name, Uint8List bytes) =>
+    heavy(() => parseBytes(bytes, name));
+
+Future<List<CamPath>> _heavyHeal(List<CamPath> raw) =>
+    heavy(() => healGeometry(raw, ManufacturingParams()));
+
+Future<List<Issue>> _heavyAnalyze(List<CamPath> healed) => heavy(
     () => analyzeManufacturability(healed, ManufacturingParams()).issues);
 
-Future<PatternResult> _isolateRecognizePattern(List<CamPath> healed) =>
-    Isolate.run(() => PatternRecognizer().analyze(healed));
+Future<PatternResult> _heavyRecognize(List<CamPath> healed) =>
+    heavy(() => PatternRecognizer().analyze(healed));
 
-Future<List<CamPath>> _isolateGenerateGrid(List<CamPath> master,
+Future<List<CamPath>> _heavyGrid(List<CamPath> master,
         {required int cols,
         required int rows,
         required double stepX,
         required double stepY}) =>
-    Isolate.run(() => generateArrayGrid(master,
+    heavy(() => generateArrayGrid(master,
         cols: cols, rows: rows, stepX: stepX, stepY: stepY));
 
-Future<List<CamPath>> _isolateApplyFix(List<CamPath> raw, Issue issue) =>
-    Isolate.run(() => applyIssueFix(raw, issue, ManufacturingParams()));
+Future<List<CamPath>> _heavyFix(List<CamPath> raw, Issue issue) =>
+    heavy(() => applyIssueFix(raw, issue, ManufacturingParams()));
 
 /// Выполнение [future] с общим таймаутом локальных операций (вместо
 /// «вечной загрузки» — понятная ошибка за [_fileTimeout]).
@@ -71,11 +95,12 @@ class GeometryScreen extends StatefulWidget {
   final Converter? converter;
 
   /// Полный разбор импортированного файла: (контуры, ошибки).
-  /// По умолчанию — parseFile + анализ технологичности в изоляте.
-  /// В widget-тестах передаётся детерминированная заглушка: Isolate.run
-  /// не завершается под fakeAsync.
+  /// По умолчанию — разбор байтов (parseBytes) + анализ технологичности
+  /// через [heavy] (изолят на desktop, главный поток на web).
+  /// В widget-тестах передаётся детерминированная заглушка: тяжёлый вызов
+  /// не завершается под fakeAsync. Аргумент — строка [display] источника.
   final Future<({List<CamPath> paths, List<Issue> issueList})> Function(
-      String filePath)? processOverride;
+      String display)? processOverride;
 
   const GeometryScreen(
       {super.key,
@@ -175,39 +200,56 @@ class _GeometryScreenState extends State<GeometryScreen> {
           padding: const EdgeInsets.all(8),
           child: Row(
             children: [
-              Expanded(
-                child: Tooltip(
-                  message: 'Путь к векторному файлу. Поддерживаются DXF, SVG, '
-                      'PDF, AI, CDR, EPS. Файл удобнее выбрать кнопкой '
-                      '«Обзор…».',
-                  child: TextField(
-                    controller: _pathCtrl,
-                    decoration: const InputDecoration(
-                        labelText: 'Путь к файлу (DXF/SVG/PDF/AI/CDR/EPS)',
-                        helperText:
-                            'AI/CDR/EPS конвертируются автоматически',
-                        border: OutlineInputBorder(),
-                        isDense: true),
+              if (!isWeb) ...[
+                Expanded(
+                  child: Tooltip(
+                    message: 'Путь к векторному файлу. Поддерживаются DXF, '
+                        'SVG, PDF, AI, CDR, EPS. Файл удобнее выбрать кнопкой '
+                        '«Обзор…».',
+                    child: TextField(
+                      controller: _pathCtrl,
+                      decoration: const InputDecoration(
+                          labelText: 'Путь к файлу (DXF/SVG/PDF/AI/CDR/EPS)',
+                          helperText:
+                              'AI/CDR/EPS конвертируются автоматически',
+                          border: OutlineInputBorder(),
+                          isDense: true),
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              Tooltip(
-                message: 'Загрузить и разобрать выбранный векторный файл.',
-                child: FilledButton(
-                    onPressed: _busy ? null : _import,
-                    child: const Text('Импорт')),
-              ),
-              const SizedBox(width: 8),
-              Tooltip(
-                message: 'Выбрать векторный файл в диалоге — без ручного '
-                    'ввода пути.',
-                child: OutlinedButton.icon(
-                    onPressed: _busy ? null : _browse,
-                    icon: const Icon(Icons.folder_open, size: 18),
-                    label: const Text('Обзор')),
-              ),
-              const SizedBox(width: 8),
+                const SizedBox(width: 8),
+                Tooltip(
+                  message: 'Загрузить и разобрать выбранный векторный файл.',
+                  child: FilledButton(
+                      onPressed: _busy ? null : _import,
+                      child: const Text('Импорт')),
+                ),
+                const SizedBox(width: 8),
+                Tooltip(
+                  message: 'Выбрать векторный файл в диалоге — без ручного '
+                      'ввода пути.',
+                  child: OutlinedButton.icon(
+                      onPressed: _busy ? null : _browse,
+                      icon: const Icon(Icons.folder_open, size: 18),
+                      label: const Text('Обзор')),
+                ),
+                const SizedBox(width: 8),
+              ] else ...[
+                const Expanded(
+                  child: Text(
+                      'Файл: DXF/SVG/PDF/AI/CDR/EPS — выберите файл кнопкой '
+                      '«Импорт файла». AI/CDR/EPS конвертируются на сервере.'),
+                ),
+                const SizedBox(width: 8),
+                Tooltip(
+                  message: 'Загрузить и разобрать векторный файл.',
+                  child: FilledButton.icon(
+                      onPressed: _busy ? null : _import,
+                      icon: const Icon(Icons.upload_file, size: 18),
+                      label: const Text('Импорт файла')),
+                ),
+                const SizedBox(width: 8),
+              ],
               _serverButton(),
             ],
           ),
@@ -506,33 +548,50 @@ class _GeometryScreenState extends State<GeometryScreen> {
     );
   }
 
+  /// Источник импорта: на web — браузерный выбор файла (байты), на desktop —
+  /// путь из поля ввода (проверка существования) + чтение байтов.
   Future<void> _import() async {
-    final path = _pathCtrl.text.trim();
     final project = widget.project;
     if (project == null) return;
-    if (path.isEmpty || !await File(path).exists()) {
-      setState(() => _status = 'Файл не найден: $path');
-      _log('Файл не найден: $path', level: LogLevel.error);
-      return;
+
+    final _ImportFile src;
+    if (isWeb) {
+      final pick = await pickSingleFile();
+      if (pick == null || !mounted) return;
+      src = _ImportFile(
+          name: pick.name, bytes: pick.bytes, display: pick.name);
+    } else {
+      final path = _pathCtrl.text.trim();
+      if (path.isEmpty || !await exists(path)) {
+        setState(() => _status = 'Файл не найден: $path');
+        _log('Файл не найден: $path', level: LogLevel.error);
+        return;
+      }
+      if (mounted) {
+        setState(() => _status = 'Чтение файла…');
+      }
+      final bytes = await readBytes(path);
+      src = _ImportFile(name: _pathBase(path), bytes: bytes, display: path);
     }
+
     // Закрытые форматы (AI/CDR/EPS) — серверная конвертация в SVG (спека §3,
     // ШАГ 1), затем обычный разбор доменом.
-    if (ConverterApi.isClosedFormat(path)) {
-      await _importClosed(path, project);
+    if (ConverterApi.isClosedFormat(src.name)) {
+      await _importClosed(src, project);
     } else {
-      await _importLocal(path, project);
+      await _importLocal(src, project);
     }
   }
 
   /// Локальные форматы (DXF/SVG/PDF/AI-PDF): прямой разбор доменом.
-  Future<void> _importLocal(String path, Project project) async {
+  Future<void> _importLocal(_ImportFile src, Project project) async {
     setState(() {
       _busy = true;
       _master = null; // новый файл — старый мастер массива недействителен
       _status = 'Разбор файла…';
     });
     try {
-      await _parseAndApply(path, project, sourcePath: path);
+      await _parseAndApply(src, project);
     } catch (e) {
       if (mounted) setState(() => _status = 'Ошибка разбора: $e');
       _log('Ошибка разбора: $e', level: LogLevel.error);
@@ -542,31 +601,34 @@ class _GeometryScreenState extends State<GeometryScreen> {
   }
 
   /// AI/CDR/EPS: конвертация через services/converter, затем разбор SVG.
-  Future<void> _importClosed(String path, Project project) async {
+  Future<void> _importClosed(_ImportFile src, Project project) async {
     setState(() {
       _busy = true;
       _master = null; // новый файл — старый мастер массива недействителен
       _status = 'Конвертация закрытого формата на сервере…';
     });
     _log('Конвертация закрытого формата…');
-    File? tmp;
     try {
-      final svg = await _converter.convertToSvg(File(path));
-      tmp = File('${Directory.systemTemp.path}/pp_import_'
-          '${DateTime.now().microsecondsSinceEpoch}.svg');
-      await tmp.writeAsBytes(svg, flush: true);
-      final summary = await _parseAndApply(tmp.path, project,
-          sourcePath: path, progress: 'Разбор сконвертированного SVG…');
+      final svg = await _converter.convertToSvg(
+          fileName: src.name, bytes: src.bytes);
+      // SVG разбирается сразу из байтов (временный файл не нужен).
+      final svgSource = _ImportFile(
+        name: 'converted.svg',
+        bytes: svg,
+        display: src.display,
+      );
+      final summary = await _parseAndApply(svgSource, project,
+          progress: 'Разбор сконвертированного SVG…');
       if (mounted) {
         setState(() => _status = 'Конвертация успешна. $summary');
       }
       _log('Конвертация успешна. $summary');
     } on ConverterException catch (e) {
       // .ai может оказаться PDF-совместимым — пробуем локальный разбор.
-      if (path.toLowerCase().endsWith('.ai')) {
+      if (src.name.toLowerCase().endsWith('.ai')) {
         try {
-          final summary = await _parseAndApply(path, project,
-              sourcePath: path, progress: 'Локальный разбор AI…');
+          final summary = await _parseAndApply(src, project,
+              progress: 'Локальный разбор AI…');
           if (mounted) {
             setState(() => _status =
                 'Сервер недоступен — AI разобран локально как PDF. $summary');
@@ -589,20 +651,16 @@ class _GeometryScreenState extends State<GeometryScreen> {
       if (mounted) setState(() => _status = 'Ошибка: $e');
       _log('Ошибка импорта: $e', level: LogLevel.error);
     } finally {
-      try {
-        if (tmp != null) await tmp.delete();
-      } catch (_) {}
       if (mounted) setState(() => _busy = false);
     }
   }
 
-  /// Разбор [filePath] доменом и запись результата в проект.
-  /// Источник проекта ([Project.inputFile]) — исходный файл пользователя.
-  /// Возвращает текст статуса. Разбор и анализ идут отдельными шагами с
-  /// таймаутом, чтобы вместо «вечной загрузки» было видно текущий этап и
-  /// понятная ошибка.
-  Future<String> _parseAndApply(String filePath, Project project,
-      {required String sourcePath, String progress = 'Разбор файла…'}) async {
+  /// Разбор [source] доменом и запись результата в проект.
+  /// Источник проекта ([Project.inputFile]) — [source.display] (исходный файл
+  /// пользователя). Разбор и анализ идут отдельными шагами с таймаутом, чтобы
+  /// вместо «вечной загрузки» было видно текущий этап и понятную ошибку.
+  Future<String> _parseAndApply(_ImportFile source, Project project,
+      {String progress = 'Разбор файла…'}) async {
     if (mounted) setState(() => _status = progress);
     final process = widget.processOverride;
 
@@ -610,12 +668,13 @@ class _GeometryScreenState extends State<GeometryScreen> {
     List<Issue> issueList;
     if (process != null) {
       // Тестовая заглушка: один вызов возвращает и контуры, и ошибки.
-      final result = await process(filePath);
+      final result = await process(source.display);
       paths = result.paths;
       issueList = result.issueList;
     } else {
       try {
-        paths = await _isolateParseOnly(filePath).timeout(_fileTimeout);
+        paths = await _parseBytesHeavy(source.name, source.bytes)
+            .timeout(_fileTimeout);
       } on TimeoutException {
         throw StateError('Разбор файла занял больше ${_fileTimeout.inSeconds} с'
             ' — файл слишком сложный или повреждён. Упростите его или '
@@ -623,7 +682,8 @@ class _GeometryScreenState extends State<GeometryScreen> {
       }
       if (mounted) setState(() => _status = 'Анализ технологичности…');
       try {
-        issueList = await _isolateAnalyze(paths).timeout(_fileTimeout);
+        issueList =
+            await _heavyAnalyze(paths).timeout(_fileTimeout);
       } on TimeoutException {
         throw StateError('Анализ ошибок занял больше ${_fileTimeout.inSeconds}'
             ' с — слишком много контуров в файле.');
@@ -632,7 +692,7 @@ class _GeometryScreenState extends State<GeometryScreen> {
 
     final updated = Project(
       name: project.name,
-      inputFile: sourcePath,
+      inputFile: source.display,
       params: project.params,
       rawPaths: paths,
       healedPaths: const [], // новый файл — прежнее лечение недействительно
@@ -652,12 +712,12 @@ class _GeometryScreenState extends State<GeometryScreen> {
   }
 
   /// Выбор векторного файла встроенным диалогом (без внешних плагинов).
+  /// Только desktop: на web файл выбирается браузерным диалогом [pickSingleFile].
   Future<void> _browse() async {
-    final start =
-        Platform.environment['USERPROFILE'] ?? Directory.current.path;
+    if (isWeb) return;
     final picked = await showDialog<String>(
       context: context,
-      builder: (_) => _VectorFileDialog(startDir: start),
+      builder: (_) => _VectorFileDialog(startDir: homeDir),
     );
     if (picked == null || !mounted) return;
     setState(() {
@@ -757,10 +817,10 @@ class _GeometryScreenState extends State<GeometryScreen> {
     });
     _log('Лечение геометрии…');
     try {
-      final healed = await _timed(_isolateHeal(project.rawPaths),
+      final healed = await _timed(_heavyHeal(project.rawPaths),
           'Лечение геометрии');
       final issues =
-          await _timed(_isolateAnalyze(healed), 'Анализ ошибок');
+          await _timed(_heavyAnalyze(healed), 'Анализ ошибок');
       widget.onChange(Project(
         name: project.name,
         inputFile: project.inputFile,
@@ -797,7 +857,7 @@ class _GeometryScreenState extends State<GeometryScreen> {
     _log('Лечение мастер-элемента — рабочий вектор из извлечённого массива');
     try {
       final healed =
-          await _timed(_isolateHeal(base), 'Лечение мастер-элемента');
+          await _timed(_heavyHeal(base), 'Лечение мастер-элемента');
       await _commitMaster(project, healed);
     } on TimeoutException catch (e) {
       if (mounted) setState(() => _status = 'Ошибка: $e');
@@ -829,14 +889,14 @@ class _GeometryScreenState extends State<GeometryScreen> {
     }
     if (mounted) setState(() => _status = 'Анализ мастер-элемента…');
     final issues =
-        await _timed(_isolateAnalyze(cleaned), 'Анализ мастер-элемента');
+        await _timed(_heavyAnalyze(cleaned), 'Анализ мастер-элемента');
     if (mounted) setState(() => _status = 'Размножение по закону…');
     final cols = pat.cols < 1 ? 1 : pat.cols;
     final rows = pat.rows < 1 ? 1 : pat.rows;
     final stepX = pat.stepX > 0 ? pat.stepX : pat.labelW;
     final stepY = pat.stepY > 0 ? pat.stepY : pat.labelH;
     final grid = await _timed(
-        _isolateGenerateGrid(cleaned,
+        _heavyGrid(cleaned,
             cols: cols, rows: rows, stepX: stepX, stepY: stepY),
         'Размножение по закону');
     final pattern = PatternResult(
@@ -901,7 +961,7 @@ class _GeometryScreenState extends State<GeometryScreen> {
     });
     _log('Распознавание массива…');
     try {
-      final result = await _timed(_isolateRecognizePattern(source),
+      final result = await _timed(_heavyRecognize(source),
           'Распознавание массива');
       if (!result.isArray || result.masterPaths.isEmpty) {
         if (mounted) {
@@ -920,7 +980,7 @@ class _GeometryScreenState extends State<GeometryScreen> {
       if (mounted) setState(() => _status = 'Лечение мастер-элемента…');
       _log('Лечение мастер-элемента…');
       final healedAll = (await _timed(
-              _isolateHeal(result.masterPaths), 'Лечение мастер-элемента'))
+              _heavyHeal(result.masterPaths), 'Лечение мастер-элемента'))
           .map((p) => CamPath(List.of(p.points),
               isClosed: p.isClosed, layerName: 'MASTER'))
           .toList();
@@ -942,7 +1002,7 @@ class _GeometryScreenState extends State<GeometryScreen> {
       if (mounted) setState(() => _status = 'Анализ мастер-элемента…');
       _log('Анализ мастер-элемента…');
       final masterIssues = await _timed(
-          _isolateAnalyze(healedMaster), 'Анализ мастер-элемента');
+          _heavyAnalyze(healedMaster), 'Анализ мастер-элемента');
 
       // 3) Размножение по распознанному закону на слой 'ARRAY'.
       if (mounted) setState(() => _status = 'Размножение по закону…');
@@ -952,7 +1012,7 @@ class _GeometryScreenState extends State<GeometryScreen> {
       final stepX = result.stepX > 0 ? result.stepX : result.labelW;
       final stepY = result.stepY > 0 ? result.stepY : result.labelH;
       final grid = await _timed(
-          _isolateGenerateGrid(healedMaster,
+          _heavyGrid(healedMaster,
               cols: cols, rows: rows, stepX: stepX, stepY: stepY),
           'Размножение по закону');
 
@@ -1055,7 +1115,7 @@ class _GeometryScreenState extends State<GeometryScreen> {
           .floor();
       final c = cols < 1 ? 1 : cols;
       final r = rows < 1 ? 1 : rows;
-      final grid = await _isolateGenerateGrid(pattern.masterPaths,
+      final grid = await _heavyGrid(pattern.masterPaths,
           cols: c,
           rows: r,
           stepX: pattern.labelW + project.params.gapX,
@@ -1093,7 +1153,7 @@ class _GeometryScreenState extends State<GeometryScreen> {
       });
       _log('Исправление мастер-элемента (${issue.message})…');
       try {
-        final fixed = await _isolateApplyFix(base, issue);
+        final fixed = await _heavyFix(base, issue);
         await _commitMaster(project, fixed);
         if (mounted) {
           setState(() => _status = 'Исправление применено к мастеру: '
@@ -1112,7 +1172,7 @@ class _GeometryScreenState extends State<GeometryScreen> {
     });
     _log('Применение исправления…');
     try {
-      final fixed = await _isolateApplyFix(project.rawPaths, issue);
+      final fixed = await _heavyFix(project.rawPaths, issue);
       widget.onChange(Project(
         name: project.name,
         inputFile: project.inputFile,
@@ -1138,6 +1198,8 @@ class _GeometryScreenState extends State<GeometryScreen> {
 
 /// Встроенный диалог выбора векторного файла (без внешних плагинов):
 /// навигация по папкам, отбор по расширениям DXF/SVG/PDF/AI/CDR/EPS.
+/// Файловая система — через платформенные [listDir]/[exists]/[isDir]
+/// (компилируется и для web, хотя на web диалог не открывается).
 class _VectorFileDialog extends StatefulWidget {
   final String startDir;
   const _VectorFileDialog({required this.startDir});
@@ -1149,17 +1211,19 @@ class _VectorFileDialog extends StatefulWidget {
 class _VectorFileDialogState extends State<_VectorFileDialog> {
   static const _exts = ['dxf', 'svg', 'pdf', 'ai', 'cdr', 'eps'];
 
-  late Directory _dir;
+  late String _cur;
   late final TextEditingController _pathCtrl;
+  List<FsEntry> _entries = const [];
+  bool _loading = false;
   String? _selected;
   bool _denied = false;
 
   @override
   void initState() {
     super.initState();
-    _dir = Directory(widget.startDir);
-    if (!_dir.existsSync()) _dir = Directory.current;
-    _pathCtrl = TextEditingController(text: _dir.path);
+    _cur = widget.startDir;
+    _pathCtrl = TextEditingController(text: _cur);
+    _loadDir(_cur);
   }
 
   @override
@@ -1168,55 +1232,83 @@ class _VectorFileDialogState extends State<_VectorFileDialog> {
     super.dispose();
   }
 
-  static bool _isSupported(String path) {
-    final name = path.split(RegExp(r'[\\/]')).last.toLowerCase();
-    return _exts.any(name.endsWith);
+  static bool _isSupportedName(String name) {
+    final n = name.toLowerCase();
+    return _exts.any(n.endsWith);
   }
 
-  /// Содержимое папки: папки и векторные файлы, отсортированы.
-  List<FileSystemEntity> _entries() {
+  /// Каталог на уровень выше; null — корень (подниматься некуда).
+  static String? _parentOf(String path) {
+    var p = path;
+    if (p.endsWith('/') || p.endsWith(r'\')) {
+      p = p.substring(0, p.length - 1);
+    }
+    final i = p.lastIndexOf(RegExp(r'[\\/]'));
+    if (i <= 0) return null;
+    return p.substring(0, i);
+  }
+
+  /// Чтение содержимого каталога [path] (async, платформенный список).
+  Future<void> _loadDir(String path) async {
+    setState(() {
+      _loading = true;
+      _denied = false;
+    });
     try {
-      final list = _dir.listSync(followLinks: false);
-      list.sort((a, b) {
-        final ad = a is Directory, bd = b is Directory;
-        if (ad != bd) return ad ? -1 : 1;
-        return a.path.toLowerCase().compareTo(b.path.toLowerCase());
+      var p = path;
+      if (!await exists(p)) {
+        // Папки нет (например, стартовый каталог) — домашний каталог.
+        p = homeDir;
+      }
+      final list = await listDir(p);
+      final dirs = <FsEntry>[];
+      final files = <FsEntry>[];
+      for (final e in list) {
+        if (e.isDir) {
+          dirs.add(e);
+        } else if (_isSupportedName(e.name)) {
+          files.add(e);
+        }
+      }
+      int cmp(FsEntry a, FsEntry b) =>
+          a.name.toLowerCase().compareTo(b.name.toLowerCase());
+      dirs.sort(cmp);
+      files.sort(cmp);
+      if (!mounted) return;
+      setState(() {
+        _cur = p;
+        _entries = [...dirs, ...files];
+        _selected = null;
+        _loading = false;
+        _pathCtrl.text = p;
       });
-      return [
-        for (final e in list)
-          if (e is Directory || (e is File && _isSupported(e.path))) e
-      ];
     } catch (e) {
-      _denied = true;
       AppLog.instance.error(
-          'Геометрия', 'Не удалось прочитать папку «${_dir.path}»: $e');
-      return const [];
+          'Геометрия', 'Не удалось прочитать папку «$path»: $e');
+      if (!mounted) return;
+      setState(() {
+        _denied = true;
+        _loading = false;
+      });
     }
   }
 
-  static String _base(String path) {
-    final parts = path.split(RegExp(r'[\\/]'));
-    return parts.isEmpty ? path : parts.last;
+  void _openDir(String path) {
+    _loadDir(path);
   }
 
-  void _openDir(Directory d) {
-    setState(() {
-      _dir = d;
-      _selected = null;
-      _denied = false;
-      _pathCtrl.text = d.path;
-    });
-  }
-
-  void _submitPath() {
+  Future<void> _submitPath() async {
     final text = _pathCtrl.text.trim();
     if (text.isEmpty) return;
-    if (Directory(text).existsSync()) {
-      _openDir(Directory(text));
+    if (!await exists(text)) {
+      setState(() => _denied = true);
       return;
     }
-    final f = File(text);
-    if (f.existsSync() && _isSupported(text)) {
+    if (isDir(text)) {
+      _openDir(text);
+      return;
+    }
+    if (_isSupportedName(_pathBase(text))) {
       Navigator.pop(context, text);
       return;
     }
@@ -1225,8 +1317,7 @@ class _VectorFileDialogState extends State<_VectorFileDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final entries = _entries();
-    final canGoUp = _dir.parent.path != _dir.path;
+    final canGoUp = _parentOf(_cur) != null;
     return AlertDialog(
       title: const Text('Выбор векторного файла'),
       content: SizedBox(
@@ -1242,11 +1333,17 @@ class _VectorFileDialogState extends State<_VectorFileDialog> {
                 isDense: true,
                 border: const OutlineInputBorder(),
                 prefixIcon: const Icon(Icons.folder, size: 20),
-                errorText:
-                    _denied ? 'Не удаётся открыть или файл не поддерживается' : null,
+                errorText: _denied
+                    ? 'Не удаётся открыть или файл не поддерживается'
+                    : null,
               ),
             ),
             const SizedBox(height: 8),
+            if (_loading)
+              const Padding(
+                padding: EdgeInsets.all(16),
+                child: LinearProgressIndicator(),
+              ),
             Expanded(
               child: ListView(
                 children: [
@@ -1255,27 +1352,27 @@ class _VectorFileDialogState extends State<_VectorFileDialog> {
                       dense: true,
                       leading: const Icon(Icons.arrow_upward),
                       title: const Text('.. (на уровень выше)'),
-                      onTap: () => _openDir(_dir.parent),
+                      onTap: () => _openDir(_parentOf(_cur)!),
                     ),
-                  for (final e in entries)
-                    if (e is Directory)
+                  for (final e in _entries)
+                    if (e.isDir)
                       ListTile(
                         dense: true,
                         leading: Icon(Icons.folder,
                             color: Colors.amber.shade800),
-                        title: Text(_base(e.path)),
-                        onTap: () => _openDir(e),
+                        title: Text(e.name),
+                        onTap: () => _openDir(e.path),
                       )
                     else
                       ListTile(
                         dense: true,
                         selected: _selected == e.path,
                         leading: const Icon(Icons.insert_drive_file, size: 20),
-                        title: Text(_base(e.path)),
+                        title: Text(e.name),
                         subtitle: const Text('Векторный файл'),
                         onTap: () => setState(() => _selected = e.path),
                       ),
-                  if (entries.isEmpty && !_denied)
+                  if (!_loading && _entries.isEmpty && !_denied)
                     const Padding(
                       padding: EdgeInsets.all(16),
                       child: Text('В этой папке нет векторных файлов.'),

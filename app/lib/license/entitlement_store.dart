@@ -1,28 +1,26 @@
-/// Кэш энтайтлментов на диске + FeatureGate + таймер триала.
+/// Кэш энтайтлментов (JSON: файл на desktop / localStorage на web) +
+/// FeatureGate + таймер триала.
 library;
 
 import 'dart:convert';
-import 'dart:io';
 
+import '../platform/json_store.dart';
 import 'license_client.dart';
 
-/// Хранилище энтайтлментов: JSON на диске.
+/// Хранилище энтайтлментов: JSON (файл или localStorage — среда сама решит).
 class EntitlementStore {
-  final String directory;
-  EntitlementStore(this.directory);
+  final JsonStore _store;
+  EntitlementStore(String directory) : _store = JsonStore(directory);
 
   Future<void> save(Entitlement e) async {
-    final dir = Directory(directory);
-    await dir.create(recursive: true);
-    await File('${dir.path}/entitlement.json')
-        .writeAsString(jsonEncode(e.toJson()));
+    await _store.write('entitlement.json', jsonEncode(e.toJson()));
   }
 
   Future<Entitlement?> load() async {
-    final f = File('${directory == '' ? '.' : directory}/entitlement.json');
-    if (!await f.exists()) return null;
+    final s = await _store.read('entitlement.json');
+    if (s == null) return null;
     try {
-      final j = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
+      final j = jsonDecode(s) as Map<String, dynamic>;
       return Entitlement.fromJson(j);
     } catch (_) {
       return null;

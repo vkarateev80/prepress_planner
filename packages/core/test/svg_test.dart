@@ -1,5 +1,6 @@
 // Тесты SVG-парсера (оракул: cam_material/src/parser/svg_parser.py + svgelements).
 import '../tool/test_utils.dart';
+import '../lib/io.dart';
 import '../lib/src/parser/svg_parser.dart';
 import '../lib/src/model/cam_path.dart';
 import '../lib/src/model/vec2.dart';

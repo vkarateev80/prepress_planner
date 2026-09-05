@@ -6,6 +6,7 @@
 import 'dart:io';
 
 import '../lib/prepress_core.dart';
+import '../lib/io.dart';
 
 void main(List<String> args) {
   if (args.isEmpty) {

@@ -7,7 +7,6 @@
 /// относительно высоты страницы (как в Python-эталоне). Слой — 'PDF_VECTOR'.
 library;
 
-import 'dart:io';
 import 'dart:math' as math;
 import 'dart:convert';
 import 'dart:typed_data';
@@ -22,12 +21,7 @@ const double _ptToMm = 25.4 / 72.0;
 
 class PdfParser extends BaseParser {
   @override
-  List<CamPath> parse(String filePath) {
-    final f = File(filePath);
-    if (!f.existsSync()) {
-      throw ParserException('Файл не найден: $filePath');
-    }
-    final bytes = f.readAsBytesSync();
+  List<CamPath> parseBytes(Uint8List bytes) {
     final objs = _scanObjects(bytes);
     if (objs.isEmpty) {
       throw ParserException('Ошибка при чтении PDF: не найдены объекты.');

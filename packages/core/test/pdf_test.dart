@@ -1,5 +1,6 @@
 // Тесты PDF-парсера (оракул: cam_material/src/parser/pdf_parser.py + PyMuPDF).
 import '../tool/test_utils.dart';
+import '../lib/io.dart';
 import '../lib/src/parser/pdf_parser.dart';
 import '../lib/src/model/cam_path.dart';
 import '../lib/src/model/vec2.dart';

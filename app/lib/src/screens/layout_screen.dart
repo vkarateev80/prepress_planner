@@ -1,26 +1,25 @@
 /// Экран «Раскрой/Расход»: форма, результат, варианты, превью.
 library;
 
-import 'dart:isolate';
-
 import 'package:flutter/material.dart';
 import 'package:prepress_core/prepress_core.dart';
 
 import '../../license/entitlement_store.dart';
+import '../../platform/isolates.dart';
 import '../logs/app_log.dart';
 import '../projects/project.dart';
 import '../widgets/params_form.dart';
 import '../widgets/variants_table.dart';
 
-/// Расчёт раскроя в изоляте. Вызов — только через эти топ-левел функции:
-/// замыкание, уходящее в изолят, создаётся в собственной активации и не
-/// захватывает `this` (иначе VM кладёт состояние экрана в общий контекст
-/// активации с setState-замыканием, и отправка падает как unsendable).
+/// Расчёт раскроя (изолят на desktop, прямой вызов на web). Вызов — только
+/// через эти топ-левел функции: замыкание не захватывает `this` (иначе VM
+/// кладёт состояние экрана в общий контекст активации, и отправка падает
+/// как unsendable).
 Future<MaterialResult> _isolateComputeAuto(LayoutParams params) =>
-    Isolate.run(() => computeMaterialAuto(params));
+    heavy(() => computeMaterialAuto(params));
 
 Future<List<MaterialResult>> _isolateEnumerateVariants(LayoutParams params) =>
-    Isolate.run(() => enumerateVariants(params));
+    heavy(() => enumerateVariants(params));
 
 class LayoutScreen extends StatefulWidget {
   final Project? project;

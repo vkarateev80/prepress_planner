@@ -7,9 +7,9 @@
 /// равномерная выборка ~0.05 мм по длине (верхняя граница 20000 точек).
 library;
 
-import 'dart:io';
 import 'dart:math' as math;
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'base_parser.dart';
 import 'parser_exception.dart';
@@ -18,17 +18,7 @@ import '../model/vec2.dart';
 
 class DxfParser extends BaseParser {
   @override
-  List<CamPath> parse(String filePath) {
-    final f = File(filePath);
-    if (!f.existsSync()) {
-      throw ParserException('Файл не найден: $filePath');
-    }
-    late List<int> bytes;
-    try {
-      bytes = f.readAsBytesSync();
-    } catch (e) {
-      throw ParserException('Ошибка при чтении DXF файла: $e');
-    }
+  List<CamPath> parseBytes(Uint8List bytes) {
     String text;
     try {
       text = utf8.decode(bytes, allowMalformed: true);

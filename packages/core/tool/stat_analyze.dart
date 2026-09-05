@@ -3,7 +3,7 @@
 //   dart run tool/stat_analyze.dart "<файл>"
 import 'dart:io';
 
-import '../lib/src/parser/parse_file.dart';
+import '../lib/io.dart';
 import '../lib/src/model/params.dart';
 import '../lib/src/model/issue.dart';
 import '../lib/src/manufacturability/geometry_checks.dart';

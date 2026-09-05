@@ -1,8 +1,11 @@
 /// Клиент лицензий: HTTP к services/license или заглушка (без сети).
+/// MachineId — стабильный идентификатор устройства (JSON-хранилище).
 library;
 
 import 'dart:convert';
-import 'dart:io';
+
+import '../platform/http.dart';
+import '../platform/json_store.dart';
 
 /// Энтайтлменты устройства.
 class Entitlement {
@@ -46,28 +49,19 @@ class LicenseClient {
   /// Активация: без ключа — локальный триал 15 дней.
   Future<Entitlement> activate(String machineId, {String? key}) async {
     final url = serverUrl;
-    if (url != null) {
+    if (url != null && url.isNotEmpty) {
       try {
-        final client = HttpClient();
-        try {
-          final req = await client
-              .postUrl(Uri.parse('$url/license/activate'))
-              .timeout(const Duration(seconds: 5));
-          req.headers.contentType = ContentType.json;
-          req.write(jsonEncode({'machine_id': machineId, 'key': key}));
-          final resp = await req.close();
-          final body = await resp.transform(utf8.decoder).join();
-          final data = jsonDecode(body) as Map<String, dynamic>;
-          return Entitlement(
-            pro: data['status'] == 'active' || data['status'] == 'trial',
-            until: data['expires_at'] == null
-                ? null
-                : DateTime.tryParse(data['expires_at'] as String),
-            source: 'server',
-          );
-        } finally {
-          client.close();
-        }
+        final resp = await httpJsonPost('$url/license/activate',
+            json: {'machine_id': machineId, 'key': key},
+            timeout: const Duration(seconds: 5));
+        final data = jsonDecode(resp.text) as Map<String, dynamic>;
+        return Entitlement(
+          pro: data['status'] == 'active' || data['status'] == 'trial',
+          until: data['expires_at'] == null
+              ? null
+              : DateTime.tryParse(data['expires_at'] as String),
+          source: 'server',
+        );
       } catch (_) {
         // Сеть недоступна — локальный кэш/заглушка.
       }
@@ -84,29 +78,20 @@ class LicenseClient {
 
   Future<Entitlement> validate(String machineId) async {
     final url = serverUrl;
-    if (url != null) {
+    if (url != null && url.isNotEmpty) {
       try {
-        final client = HttpClient();
-        try {
-          final req = await client
-              .postUrl(Uri.parse('$url/license/validate'))
-              .timeout(const Duration(seconds: 5));
-          req.headers.contentType = ContentType.json;
-          req.write(jsonEncode({'machine_id': machineId}));
-          final resp = await req.close();
-          final body = await resp.transform(utf8.decoder).join();
-          final data = jsonDecode(body) as Map<String, dynamic>;
-          return Entitlement(
-            pro: data['pro'] == true,
-            until: data['until'] == null
-                ? null
-                : DateTime.tryParse(data['until'] as String),
-            trialDaysLeft: (data['trial_days_left'] as num?)?.toInt() ?? 0,
-            source: 'server',
-          );
-        } finally {
-          client.close();
-        }
+        final resp = await httpJsonPost('$url/license/validate',
+            json: {'machine_id': machineId},
+            timeout: const Duration(seconds: 5));
+        final data = jsonDecode(resp.text) as Map<String, dynamic>;
+        return Entitlement(
+          pro: data['pro'] == true,
+          until: data['until'] == null
+              ? null
+              : DateTime.tryParse(data['until'] as String),
+          trialDaysLeft: (data['trial_days_left'] as num?)?.toInt() ?? 0,
+          source: 'server',
+        );
       } catch (_) {
         // offline
       }
@@ -115,17 +100,16 @@ class LicenseClient {
   }
 }
 
-/// Стабильный machine-id: UUID в файле рядом с приложением/в профиле.
+/// Стабильный machine-id: UUID в файле (desktop) / localStorage (web).
 class MachineId {
   static Future<String> load(String directory) async {
-    final dir = Directory(directory);
-    await dir.create(recursive: true);
-    final f = File('${dir.path}/machine_id.txt');
-    if (await f.exists()) {
-      return (await f.readAsString()).trim();
+    final store = JsonStore(directory);
+    final existing = await store.read('machine_id.txt');
+    if (existing != null && existing.trim().isNotEmpty) {
+      return existing.trim();
     }
     final id = _uuid();
-    await f.writeAsString(id);
+    await store.write('machine_id.txt', id);
     return id;
   }
 

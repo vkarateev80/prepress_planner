@@ -3,6 +3,7 @@
 import 'dart:io';
 
 import '../lib/prepress_core.dart';
+import '../lib/io.dart';
 
 String fx(String name) => '../../fixtures/$name';
 

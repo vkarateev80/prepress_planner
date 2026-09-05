@@ -1,14 +1,16 @@
-/// Диспетчер разбора векторных файлов по расширению (порт
+/// Диспетчер разбора векторных байтов по имени/расширению (порт
 /// cam_material pipeline_helpers.py + cam_pipeline ai_parser.py).
 ///
 /// Локально: .dxf, .svg, .pdf, .ai (если начинается с `%PDF` — как PDF,
 /// иначе — серверная конвертация). .eps/.cdr/прочие — понятное русское
 /// исключение «требуется серверная конвертация».
+///
+/// Файловая система (dart:io) в этот модуль не входит — только байты;
+/// чтение файлов по пути живёт в io-фасаде пакета (lib/io.dart).
 library;
 
-import 'dart:io';
+import 'dart:typed_data';
 
-import 'base_parser.dart';
 import 'parser_exception.dart';
 import 'dxf_parser.dart';
 import 'svg_parser.dart';
@@ -16,20 +18,21 @@ import 'pdf_parser.dart';
 import 'ai_pdf_parser.dart';
 import '../model/cam_path.dart';
 
-/// Разобрать файл по расширению в список полилиний (мм, Y вверх).
-List<CamPath> parseFile(String filePath) {
-  final ext = filePath.toLowerCase();
+/// Разобрать байты векторного файла в список полилиний (мм, Y вверх).
+/// [name] — имя файла, по расширению выбирается парсер.
+List<CamPath> parseBytes(Uint8List bytes, String name) {
+  final ext = name.toLowerCase();
   if (ext.endsWith('.dxf')) {
-    return DxfParser().parse(filePath);
+    return DxfParser().parseBytes(bytes);
   }
   if (ext.endsWith('.svg')) {
-    return SvgParser().parse(filePath);
+    return SvgParser().parseBytes(bytes);
   }
   if (ext.endsWith('.pdf')) {
-    return PdfParser().parse(filePath);
+    return PdfParser().parseBytes(bytes);
   }
   if (ext.endsWith('.ai')) {
-    return AiPdfParser().parse(filePath);
+    return AiPdfParser().parseBytes(bytes);
   }
   if (ext.endsWith('.eps')) {
     throw ParserException('Формат EPS: требуется серверная конвертация.');
@@ -37,26 +40,14 @@ List<CamPath> parseFile(String filePath) {
   if (ext.endsWith('.cdr')) {
     throw ParserException('Формат CDR: требуется серверная конвертация.');
   }
-  final name = filePath.split(RegExp(r'[/\\]')).last;
-  final dot = name.lastIndexOf('.');
-  final fmt = dot > 0 ? name.substring(dot + 1).toUpperCase() : 'неизвестный';
+  final base = name.split(RegExp(r'[/\\]')).last;
+  final dot = base.lastIndexOf('.');
+  final fmt = dot > 0 ? base.substring(dot + 1).toUpperCase() : 'неизвестный';
   throw ParserException('Формат $fmt: требуется серверная конвертация.');
 }
 
-/// Узнать, PDF-совместим ли файл (для .ai), не читая целиком.
-bool isPdfCompatible(String filePath) {
-  try {
-    final f = File(filePath);
-    if (!f.existsSync()) return false;
-    final raf = f.openSync();
-    try {
-      final head = raf.readSync(5);
-      if (head.length < 5) return false;
-      return String.fromCharCodes(head) == '%PDF-';
-    } finally {
-      raf.closeSync();
-    }
-  } catch (_) {
-    return false;
-  }
+/// PDF-совместим ли файл (для .ai) по первым байтам.
+bool isPdfBytes(List<int> bytes) {
+  if (bytes.length < 5) return false;
+  return String.fromCharCodes(bytes.sublist(0, 5)) == '%PDF-';
 }
