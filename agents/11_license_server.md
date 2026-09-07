@@ -1,5 +1,11 @@
 # Агент 11 — Микросервисы авторизации (services/auth) и оплаты (services/payments)
 
+> **Актуализация 2026-09-07 (HEAD 448dcba):** статус — частично устарело.
+> - Тело контракта (auth+payments) соответствует финальной архитектуре и реализовано: `services/auth` (:8121) и `services/payments` (:8122) входят в прод-стек (`deploy/docker-compose.yml`), клиент ходит на них через `AccountGatewayHttp` (`app/lib/license/account_client.dart`).
+> - ВАЖНО: исторический «license server» (`services/license` — тема контракта по имени файла) в прод-стек НЕ входит и клиентом не вызывается: в `app/lib/main.dart` `LicenseClient()` создаётся **без serverUrl** → только локальный офлайн-триал (`app/lib/license/license_client.dart`).
+> - Маршруты `/admin/keys` и `/webhooks/*` license-сервиса — без аутентификации, дефолтный секрет `dev-secret-change-me`; см. `SECURITY.md` («осиротевший license-сервис»). Исправления отложены.
+> - Ограничения продакшена: forgot без SMTP возвращает код в ответе (К-1), оплата — заглушка (К-4), rate limiting отсутствует (К-5) — см. `SECURITY.md`.
+
 ## Роль (Ф4)
 Аккаунты email+пароль и подписка Pro (месяц/год) как два микросервиса.
 Платёжный провайдер — заглушка (checkout → confirm/webhook), контракт заложен

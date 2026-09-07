@@ -1,5 +1,11 @@
 # Агент 13 — Сборка, релиз, CI (инфраструктура)
 
+> **Актуализация 2026-09-07 (HEAD 448dcba):** статус — частично устарело.
+> - Фактически собраны и задеплоены: **Windows** (`app\build\windows\x64\runner\Release\prepress_planner.exe`), **Linux** (через WSL, ярлык на рабочем столе), **Web** (`flutter build web` → nginx :8081, коммит `881cf72`). iOS/macOS-бинари не собирались (см. `docs/HANDOFF.md`).
+> - Репозиторий запушен в GitHub `vkarateev80/prepress_planner` (ветка `master`, HEAD `448dcba`); `.github/workflows/ci.yml` и `release.yml` существуют, но **прогон GitHub Actions не подтверждён** — не утверждать обратное.
+> - Состав стека изменился: Docker-образы собираются для converter/auth/payments/web (`deploy/`), а не «converter+license», как в матрице контракта.
+> - `services/{converter,auth,payments,license}/README.md`, `app/README.md`, `scripts/run_domain_tests.{ps1,sh}` — на месте (см. корневой `README.md`).
+
 ## Роль (Ф5)
 Матрица сборки и непрерывная интеграция всех частей.
 

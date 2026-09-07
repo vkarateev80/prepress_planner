@@ -1,5 +1,11 @@
 # Агент 12 — Аккаунт и подписка в приложении (app/lib/license/)
 
+> **Актуализация 2026-09-07 (HEAD 448dcba):** статус — актуально.
+> - Фактическая реализация совпадает с телом контракта: `AccountGatewayHttp` = `AuthApi` + `PaymentsApi` (`app/lib/license/account_client.dart`), серверные сессии, лимит устройств 1/1, forgot/reset (коммиты `61b4694`, `4f0cd3e`), подключён в `app/lib/main.dart`.
+> - Локальный `LicenseClient` — только офлайн-триал 15 дней: в `main.dart` создаётся без `serverUrl`, к `services/license` не обращается.
+> - Адреса: desktop — env `PP_AUTH_URL`/`PP_PAYMENTS_URL`, дефолт `http://193.233.193.12:8121/8122`; web — env недоступен, те же пути через прокси единого origin :8081; хранилище — файл/`localStorage`.
+> - Гейтинг и кэш энтайтлментов — локальные (`state/entitlement.json`/`localStorage`), серверного энфорсмента Pro нет; см. `SECURITY.md` («лицензирование — клиентская заглушка»).
+
 ## Роль (Ф4)
 Клиентская часть монетизации в Flutter-приложении: вход/регистрация по
 email+пароль (с device_id = machine_id), сброс пароля, лимит устройств 1/1,

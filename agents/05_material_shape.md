@@ -1,5 +1,7 @@
 # Агент 05 — Расход материала, форма этикетки, оптимизация раскроя (packages/core/lib/src/calculator/)
 
+> **Актуализация 2026-09-07 (HEAD 448dcba):** статус — актуально. Математика реализована 1:1 с эталонами (`material_test.dart`, `shape_test.dart`, `optimizer_test.dart` зелёные). Рейтинг по магнитным валам Z и кнопка «Применить» для вариантов — UI-надстройка приложения над `computeMaterialAuto` (коммиты `8a57827`, `448dcba`), ядро не менялось.
+
 ## Роль
 Порт 1:1 математики расхода из `cam_material/src/calculator/material.py` и `optimizer.py` + **новая** shape-модель (чистая площадь формы) и свод расхода. Потребляет аг.04 (PatternResult.masterArea).
 

@@ -1,5 +1,9 @@
 # Агент 07 — Экономика и ТЭО (packages/core/lib/src/economics/)
 
+> **Актуализация 2026-09-07 (HEAD 448dcba):** статус — актуально (дополнено после MVP).
+> - Интерфейс расширен: `Machine.setupMaterialMeters` (приладка, погонные метры), `TeoInput.setupMaterialMeters`/`shiftCostPerShift` (стоимость рабочей смены), `TeoResult.shiftsUsed`/`shiftCost` — коммит `8f17b55` (см. `packages/core/lib/src/economics/machine.dart`, `teo.dart`).
+> - Единицы расчёта/отчётов — м/м², приладка (материал, м), смена и её цена (см. также аг.08 и `docs/VERIFICATION.md`).
+
 ## Роль
 Новый модуль: статьи затрат (сортамент, машины, рабочее время), расчёт ТЭО на вариант раскроя, сравнение вариантов, break-even, чувствительность. Потребляет аг.05 (`MaterialResult`, `Consumption`, `LabelShape`).
 

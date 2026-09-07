@@ -1,5 +1,11 @@
 # Агент 10 — Сервис конвертации (services/converter/)
 
+> **Актуализация 2026-09-07 (HEAD 448dcba):** статус — актуально (реализовано и развёрнуто).
+> - Реальный деплой: Docker на 193.233.193.12, порт 8120; результаты — статика `/data` (`deploy/docker-compose.yml`, `services/converter/Dockerfile`).
+> - Конфигурация: `PP_JOB_STORE=file`, `PP_JOB_TTL_HOURS`, `PP_MAX_MB`; в Dockerfile/деплое — `uvicorn --workers 2`.
+> - Клиент (app): дефолтный адрес `http://193.233.193.12:8120` (`env PP_CONVERTER_URL` на desktop; на web — относительный URL через прокси :8081); кнопки «Запустить сервер»/«Проверить сервер» на экране «Геометрия» (коммиты `15fe44a`, `1055103`, `ae0701a`; `app/lib/src/converter/`).
+> - Безопасность: сервис без авторизации и лимитов — риск аудита 2026-09-07, исправления отложены (см. `SECURITY.md`).
+
 ## Роль (Ф4)
 FastAPI-сервис: AI/CDR/EPS → SVG/PDF. Переиспользует парсеры `cam_pipeline` (эталон). Docker-образ python:3.12 + inkscape/ghostscript.
 

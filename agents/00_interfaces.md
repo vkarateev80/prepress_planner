@@ -1,5 +1,9 @@
 # Агент 00 — Общий интерфейсный хребет (shared interfaces)
 
+> **Актуализация 2026-09-07 (HEAD 448dcba):** статус — актуально.
+> - Интерфейсы домена (`packages/core`) после MVP не менялись — хребет остаётся источником сигнатур для агентов 01–08.
+> - Сервисные интерфейсы после MVP живут вне core: HTTP-эндпоинты `services/auth` и `services/payments` (аккаунты/подписка) и `services/converter` — см. `services/auth/README.md`, `services/payments/README.md`, `services/converter/README.md`.
+
 Единый источник сигнатур для всех агентов домена. Пакет: `packages/core` (чистый Dart, БЕЗ Flutter, только стандартная библиотека). Тесты: `dart test` из `packages/core`. SDK: `.tools\dart-sdk\bin\dart.exe` (абсолютный путь) или `dart` если в PATH.
 
 ## Модель (lib/src/model/)

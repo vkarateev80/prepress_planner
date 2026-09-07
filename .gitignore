@@ -47,3 +47,7 @@ Thumbs.db
 /app/state/
 /packages/core/pubspec.lock
 /test/
+
+# ── Секреты: реальные .env (с PP_AUTH_SECRET и SMTP-паролями) ──
+.env
+**/.env
