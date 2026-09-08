@@ -5,6 +5,7 @@ import 'license/entitlement_store.dart';
 import 'license/license_client.dart';
 import 'license/license_controller.dart';
 import 'src/logs/app_log.dart';
+import 'src/materials/material_library.dart';
 import 'src/projects/project.dart';
 import 'src/screens/home_shell.dart';
 
@@ -26,6 +27,7 @@ class PrepressPlannerApp extends StatefulWidget {
 
 class _PrepressPlannerAppState extends State<PrepressPlannerApp> {
   late final LicenseController _license;
+  late final MaterialLibrary _materials;
 
   @override
   void initState() {
@@ -36,11 +38,13 @@ class _PrepressPlannerAppState extends State<PrepressPlannerApp> {
       gateway: AccountGatewayHttp(), // auth + payments (VPS); офлайн-фолбэк внутри
       stateDir: 'state',
     )..init(); // bootstrap: восстановление сессии/триала
+    _materials = MaterialLibrary('state')..load(); // каталог материалов
   }
 
   @override
   void dispose() {
     _license.dispose();
+    _materials.dispose();
     super.dispose();
   }
 
@@ -52,7 +56,11 @@ class _PrepressPlannerAppState extends State<PrepressPlannerApp> {
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF2E5A88)),
         useMaterial3: true,
       ),
-      home: HomeShell(store: ProjectStore('projects'), license: _license),
+      home: HomeShell(
+        store: ProjectStore('projects'),
+        license: _license,
+        materials: _materials,
+      ),
     );
   }
 }

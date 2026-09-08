@@ -8,6 +8,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:prepress_core/prepress_core.dart';
 
+import '../materials/material_library.dart';
 import '../projects/project.dart';
 
 /// Синхронный расчёт ТЭО (мгновенно — только арифметика).
@@ -40,15 +41,19 @@ TeoResult _computeTeoDirect(
 class TeoScreen extends StatefulWidget {
   final Project? project;
   final ValueChanged<Project> onChange;
-  const TeoScreen({super.key, required this.project, required this.onChange});
+  final MaterialLibrary? materials;
+  const TeoScreen(
+      {super.key,
+      required this.project,
+      required this.onChange,
+      this.materials});
 
   @override
   State<TeoScreen> createState() => _TeoScreenState();
 }
 
 class _TeoScreenState extends State<TeoScreen> {
-  PriceCatalog catalog = PriceCatalog.defaults();
-  int materialIndex = 0;
+  final List<Machine> _machines = PriceCatalog.defaults().machines;
   int machineIndex = 0;
   double tooling = 0;
   double markup = 0;
@@ -67,6 +72,52 @@ class _TeoScreenState extends State<TeoScreen> {
 
   TeoResult? teo;
 
+  /// Полный список материалов: каталог-пример + пользовательские.
+  List<AssortmentItem> get _materials =>
+      widget.materials?.all ?? PriceCatalog.defaults().assortment;
+
+  /// Индекс выбранного материала (по [MaterialLibrary.selectedId]).
+  int _materialIndex() {
+    final id = widget.materials?.selectedId;
+    if (id != null) {
+      final i = _materials.indexWhere((a) => a.id == id);
+      if (i >= 0) return i;
+    }
+    return 0;
+  }
+
+  bool _isCustomSelected() {
+    final id = widget.materials?.selectedId;
+    if (id == null) return false;
+    return widget.materials?.customs.any((a) => a.id == id) ?? false;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    widget.materials?.addListener(_onLibraryChanged);
+  }
+
+  @override
+  void dispose() {
+    widget.materials?.removeListener(_onLibraryChanged);
+    _setupCtrl.dispose();
+    _shiftHoursCtrl.dispose();
+    _shiftsPerDayCtrl.dispose();
+    _shiftCostCtrl.dispose();
+    super.dispose();
+  }
+
+  void _onLibraryChanged() {
+    if (!mounted) return;
+    setState(() {
+      final idx = _materialIndex();
+      if (idx >= 0 && idx < _materials.length) {
+        _priceM2 = _materials[idx].pricePerM2;
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final project = widget.project;
@@ -82,26 +133,50 @@ class _TeoScreenState extends State<TeoScreen> {
             style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 8),
         Tooltip(
-          message: 'Материал и его цена за м² (из каталога затрат).',
+          message: 'Материал и его цена за м² (каталог-пример + ваши материалы).',
           child: DropdownButtonFormField<int>(
-            initialValue: materialIndex,
+            initialValue: _materialIndex(),
             isExpanded: true,
             decoration: const InputDecoration(
                 labelText: 'Сортамент',
                 border: OutlineInputBorder(),
                 isDense: true),
             items: [
-              for (var i = 0; i < catalog.assortment.length; i++)
+              for (var i = 0; i < _materials.length; i++)
                 DropdownMenuItem(
                     value: i,
                     child: Text(
-                        '${catalog.assortment[i].name} — ${catalog.assortment[i].pricePerM2.toStringAsFixed(0)} ₽/м²'))
+                        '${_materials[i].name} — ${_materials[i].pricePerM2.toStringAsFixed(0)} ₽/м²'
+                        '${(widget.materials?.customs.any((a) => a.id == _materials[i].id) ?? false) ? ' · свой' : ''}')),
             ],
-            onChanged: (v) => setState(() {
-              materialIndex = v!;
-              _priceM2 = catalog.assortment[v].pricePerM2;
-            }),
+            onChanged: (v) {
+              final m = _materials[v!];
+              setState(() => _priceM2 = m.pricePerM2);
+              widget.materials?.select(m.id);
+            },
           ),
+        ),
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            OutlinedButton.icon(
+                onPressed: _showAddMaterial,
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('Добавить материал')),
+            if (_isCustomSelected())
+              TextButton.icon(
+                  onPressed: _confirmRemoveMaterial,
+                  icon: const Icon(Icons.delete_outline, size: 18),
+                  label: const Text('Удалить материал')),
+            if (widget.materials?.error != null)
+              Flexible(
+                  child: Text(widget.materials!.error!,
+                      style: TextStyle(
+                          color: Theme.of(context).colorScheme.error,
+                          fontSize: 12))),
+          ],
         ),
         const SizedBox(height: 8),
         Tooltip(
@@ -114,16 +189,16 @@ class _TeoScreenState extends State<TeoScreen> {
                 border: OutlineInputBorder(),
                 isDense: true),
             items: [
-              for (var i = 0; i < catalog.machines.length; i++)
+              for (var i = 0; i < _machines.length; i++)
                 DropdownMenuItem(
                     value: i,
                     child: Text(
-                        '${catalog.machines[i].name} — ${catalog.machines[i].ratePerHour.toStringAsFixed(0)} ₽/ч'))
+                        '${_machines[i].name} — ${_machines[i].ratePerHour.toStringAsFixed(0)} ₽/ч'))
             ],
             onChanged: (v) => setState(() {
               machineIndex = v!;
-              _rate = catalog.machines[v].ratePerHour;
-              _setupMaterialM = catalog.machines[v].setupMaterialMeters;
+              _rate = _machines[v].ratePerHour;
+              _setupMaterialM = _machines[v].setupMaterialMeters;
               _setupCtrl.text = _setupMaterialM == 0
                   ? ''
                   : _setupMaterialM.toString();
@@ -275,15 +350,6 @@ class _TeoScreenState extends State<TeoScreen> {
 
   TeoResult? _sensitivity;
 
-  @override
-  void dispose() {
-    _setupCtrl.dispose();
-    _shiftHoursCtrl.dispose();
-    _shiftsPerDayCtrl.dispose();
-    _shiftCostCtrl.dispose();
-    super.dispose();
-  }
-
   Widget _slider(String label, String tip, double value, double min,
       double max, ValueChanged<double> onChanged) {
     return Row(
@@ -338,8 +404,8 @@ class _TeoScreenState extends State<TeoScreen> {
     try {
       final result = _computeTeoDirect(
         calc,
-        catalog.assortment[materialIndex],
-        _machineWithRate(catalog.machines[machineIndex], _rate),
+        _materials[_materialIndex()],
+        _machineWithRate(_machines[machineIndex], _rate),
         tooling,
         markup,
         _setupMaterialM,
@@ -370,12 +436,12 @@ class _TeoScreenState extends State<TeoScreen> {
     try {
       final sensMaterial = AssortmentItem(
           id: 'sens',
-          name: catalog.assortment[materialIndex].name,
+          name: _materials[_materialIndex()].name,
           pricePerM2: _priceM2);
       final result = _computeTeoDirect(
         calc,
         sensMaterial,
-        _machineWithRate(catalog.machines[machineIndex], _rate,
+        _machineWithRate(_machines[machineIndex], _rate,
             speed: _speed),
         tooling,
         markup,
@@ -387,6 +453,140 @@ class _TeoScreenState extends State<TeoScreen> {
       if (mounted) setState(() => _sensitivity = result);
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  void _toast(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(message),
+      duration: const Duration(seconds: 3),
+    ));
+  }
+
+  /// Диалог «Новый материал»: название (спецификация), цена ₽/м²,
+  /// минимальный заказ м² (необязательно).
+  Future<void> _showAddMaterial() async {
+    final lib = widget.materials;
+    if (lib == null) {
+      _toast('Каталог материалов недоступен.');
+      return;
+    }
+    final nameCtrl = TextEditingController();
+    final priceCtrl = TextEditingController();
+    final minCtrl = TextEditingController();
+    String? err;
+    final created = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlg) => AlertDialog(
+          title: const Text('Новый материал'),
+          content: SizedBox(
+            width: 400,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: nameCtrl,
+                    autofocus: true,
+                    decoration: const InputDecoration(
+                        labelText: 'Название / спецификация',
+                        hintText: 'Например: Плёнка ПЭТ 50 мкм',
+                        border: OutlineInputBorder(),
+                        isDense: true),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: priceCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true),
+                    decoration: const InputDecoration(
+                        labelText: 'Цена, ₽/м²',
+                        border: OutlineInputBorder(),
+                        isDense: true),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: minCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true),
+                    decoration: const InputDecoration(
+                        labelText: 'Мин. заказ, м² (необязательно)',
+                        border: OutlineInputBorder(),
+                        isDense: true),
+                  ),
+                  if (err != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Text(err!,
+                          style: TextStyle(
+                              color: Theme.of(ctx).colorScheme.error,
+                              fontSize: 12)),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Отмена')),
+            FilledButton(
+                onPressed: () async {
+                  final price = double.tryParse(
+                      priceCtrl.text.trim().replaceAll(',', '.'));
+                  if (nameCtrl.text.trim().isEmpty ||
+                      price == null ||
+                      price <= 0) {
+                    setDlg(() => err = 'Укажите название и цену больше 0.');
+                    return;
+                  }
+                  final min = double.tryParse(
+                      minCtrl.text.trim().replaceAll(',', '.'));
+                  final okSave = await lib.add(
+                    name: nameCtrl.text.trim(),
+                    pricePerM2: price,
+                    minOrderM2: min,
+                  );
+                  if (ctx.mounted) Navigator.pop(ctx, okSave);
+                },
+                child: const Text('Создать')),
+          ],
+        ),
+      ),
+    );
+    if (created == true && mounted) {
+      _toast('Материал добавлен и уже в списке «Сортамент».');
+    }
+  }
+
+  /// Подтверждение удаления выбранного пользовательского материала.
+  Future<void> _confirmRemoveMaterial() async {
+    final lib = widget.materials;
+    final id = lib?.selectedId;
+    if (lib == null || id == null) return;
+    final m = lib.resolve(id);
+    final yes = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Удалить материал?'),
+        content: Text(
+            '«${m.name}» будет удалён из вашего каталога. Примеры из встроенного каталога не удаляются.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Отмена')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: FilledButton.styleFrom(
+                  backgroundColor: Theme.of(ctx).colorScheme.error),
+              child: const Text('Удалить')),
+        ],
+      ),
+    );
+    if (yes == true) {
+      await lib.remove(id);
+      if (mounted) _toast('Материал удалён.');
     }
   }
 }

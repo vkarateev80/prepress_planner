@@ -7,6 +7,7 @@ import '../../license/license_controller.dart';
 import '../../license/paywall_screen.dart';
 import '../../license/account_screen.dart';
 import '../logs/app_log.dart';
+import '../materials/material_library.dart';
 import '../projects/project.dart';
 import '../widgets/log_window.dart';
 import 'geometry_screen.dart';
@@ -18,7 +19,9 @@ import 'teo_screen.dart';
 class HomeShell extends StatefulWidget {
   final ProjectStore store;
   final LicenseController? license;
-  const HomeShell({super.key, required this.store, this.license});
+  final MaterialLibrary? materials;
+  const HomeShell(
+      {super.key, required this.store, this.license, this.materials});
 
   @override
   State<HomeShell> createState() => _HomeShellState();
@@ -103,8 +106,9 @@ class _HomeShellState extends State<HomeShell> {
         onNeedPro: () =>
             _requirePro('Перебор вариантов раскроя доступен в Pro'),
       ),
-      TeoScreen(project: project, onChange: _update),
-      ReportsScreen(project: project, store: widget.store),
+      TeoScreen(project: project, onChange: _update, materials: widget.materials),
+      ReportsScreen(
+          project: project, store: widget.store, materials: widget.materials),
     ];
     return Scaffold(
       appBar: AppBar(

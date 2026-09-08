@@ -280,15 +280,18 @@ String _d4(double v) => v.toStringAsFixed(4);
 void _tableHeader(_Flow f) {
   f._ensure(11);
   final cv = f.cv;
-  cv.text('№', x: 45, yTop: f.y, size: 8);
-  cv.text('Сетка', x: 95, yTop: f.y, size: 8);
-  cv.text('Пов.', x: 160, yTop: f.y, size: 8);
-  cv.text('N', x: 205, yTop: f.y, size: 8);
-  cv.text('Отходы', x: 260, yTop: f.y, size: 8);
-  cv.text('₽ / 1000', x: 340, yTop: f.y, size: 8);
-  f.y += 10;
-  cv.line(45, f.y + 2, f.right, f.y + 2, lineWidth: 0.4);
-  f.y += 4;
+  final headerY = f.y; // базовая линия заголовка столбцов
+  cv.text('№', x: 45, yTop: headerY, size: 8);
+  cv.text('Сетка', x: 95, yTop: headerY, size: 8);
+  cv.text('Пов.', x: 160, yTop: headerY, size: 8);
+  cv.text('N', x: 205, yTop: headerY, size: 8);
+  cv.text('Отходы', x: 260, yTop: headerY, size: 8);
+  cv.text('₽ / 1000', x: 340, yTop: headerY, size: 8);
+  // Линия под заголовком — сразу под его глифами, чтобы НЕ пересекать
+  // верх первой строки данных («линия заходила на текст»).
+  f.y = headerY + 3;
+  cv.line(45, f.y, f.right, f.y, lineWidth: 0.4);
+  f.y += 9;
 }
 
 void _tableRow(_Flow f, String no, String grid, String rot, String n,
@@ -315,22 +318,25 @@ void _drawSketch(_Flow f, TeoReportData d) {
   final bw = w * scale;
   final bh = h * scale;
   final bx = (doc.pageWidth - bw) / 2;
-  // Если блок не помещается на текущей странице — начинаем новую.
-  if (f.y + 8 + bh + 34 > f.bottomLimit) {
+  // Если блок с подписями не помещается на текущей странице — начинаем новую.
+  if (f.y + 8 + bh + 44 > f.bottomLimit) {
     f.cv = doc.newPage();
     f.y = 48;
   }
   final py0 = f.y + 8; // верх бокса на (возможно новой) странице
   final cv = f.cv;
   cv.rect(bx, py0, bw, bh, lineWidth: 1.0);
+  // Подписи рисуем ПОД рамкой (не внутри!): текст внутри узкого бокса
+  // пересекался бы линиями рамки — «линия заходит на текст».
   final cap1 = 'Этикетка ${_mm(shape.w)} × ${_mm(shape.h)}';
-  cv.text(cap1,
-      x: (doc.pageWidth - doc.font.widthPt(cap1, 8)) / 2,
-      yTop: py0 + bh / 2 - 4, size: 8);
   final cap2 = 'увеличение ×${scale.toStringAsFixed(1)} '
       '(1:${(1 / scale).toStringAsFixed(2)})';
+  final c1y = py0 + bh + 14;
+  cv.text(cap1,
+      x: (doc.pageWidth - doc.font.widthPt(cap1, 8)) / 2,
+      yTop: c1y, size: 8);
   cv.text(cap2,
       x: (doc.pageWidth - doc.font.widthPt(cap2, 7)) / 2,
-      yTop: py0 + bh + 12, size: 7);
-  f.y = py0 + bh + 30;
+      yTop: c1y + 11, size: 7);
+  f.y = c1y + 11 + 12;
 }

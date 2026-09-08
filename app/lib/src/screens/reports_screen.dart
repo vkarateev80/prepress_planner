@@ -17,20 +17,34 @@ import '../../platform/env.dart';
 import '../../platform/isolates.dart';
 import '../../platform/save_out.dart';
 import '../logs/app_log.dart';
+import '../materials/material_library.dart';
 import '../projects/project.dart';
 
 /// Экспорт в тяжелом вызове через топ-левел функции: замыкание создаётся в
 /// своей активации и не захватывает состояние экрана (иначе VM делит контекст
 /// с setState-замыканием, отправка падает как unsendable).
 
-TeoReportData _buildReportData(Project project) {
+/// Разрешение материала для отчёта: выбранный в библиотеке (по id) или
+/// первый из каталога-примера (прежнее поведение).
+AssortmentItem _pickMaterial(
+    List<AssortmentItem>? materialOptions, String? materialId) {
+  if (materialId != null && materialOptions != null) {
+    for (final a in materialOptions) {
+      if (a.id == materialId) return a;
+    }
+  }
+  return PriceCatalog.defaults().assortment.first;
+}
+
+TeoReportData _buildReportData(Project project,
+    {List<AssortmentItem>? materialOptions, String? materialId}) {
   final calc = project.calc!;
   final shape = shapeFromPreset('rect', calc.labelW, calc.labelH);
   final cons = computeConsumption(calc, shape);
-  final catalog = PriceCatalog.defaults();
-  final machine = catalog.machines.first;
-  final input =
-      TeoInput(material: catalog.assortment.first, machine: machine);
+  final material =
+      _pickMaterial(materialOptions, materialId);
+  final machine = PriceCatalog.defaults().machines.first;
+  final input = TeoInput(material: material, machine: machine);
   final teo = computeTeo(calc, cons, input);
   final comparison = compareTeoVariants(
       project.variants.isNotEmpty ? project.variants : [calc],
@@ -46,19 +60,25 @@ TeoReportData _buildReportData(Project project) {
     consumption: cons,
     teo: teo,
     comparison: comparison,
-    material: catalog.assortment.first,
+    material: material,
     machine: machine,
-    workTime: catalog.workTime,
-    currency: catalog.currency,
+    workTime: PriceCatalog.defaults().workTime,
+    currency: PriceCatalog.defaults().currency,
     date: DateTime.now(),
   );
 }
 
-Future<Uint8List> _buildPdfBytes(Project project, Uint8List fontBytes) =>
-    heavy(() => buildTeoReportPdf(_buildReportData(project), fontBytes));
+Future<Uint8List> _buildPdfBytes(Project project, Uint8List fontBytes,
+        {List<AssortmentItem>? materialOptions, String? materialId}) =>
+    heavy(() => buildTeoReportPdf(
+        _buildReportData(project,
+            materialOptions: materialOptions, materialId: materialId),
+        fontBytes));
 
-Future<Uint8List> _buildXlsxBytes(Project project) =>
-    heavy(() => buildTeoXlsx(_buildReportData(project)));
+Future<Uint8List> _buildXlsxBytes(Project project,
+        {List<AssortmentItem>? materialOptions, String? materialId}) =>
+    heavy(() => buildTeoXlsx(_buildReportData(project,
+        materialOptions: materialOptions, materialId: materialId)));
 
 Future<String> _buildMasterDxfText(Project project) =>
     heavy(() => buildDxfText(project.healedPaths));
@@ -69,7 +89,10 @@ Future<String> _buildArrayDxfText(Project project) =>
 class ReportsScreen extends StatefulWidget {
   final Project? project;
   final ProjectStore store;
-  const ReportsScreen({super.key, required this.project, required this.store});
+  final MaterialLibrary? materials;
+  const ReportsScreen(
+      {super.key, required this.project, required this.store,
+      this.materials});
 
   @override
   State<ReportsScreen> createState() => _ReportsScreenState();
@@ -167,7 +190,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
         throw StateError('Кириллический шрифт не загружен (assets/fonts/'
             'DejaVuSans.ttf)');
       }
-      final pdf = await _buildPdfBytes(project, font);
+      final pdf = await _buildPdfBytes(project, font,
+          materialOptions: widget.materials?.all,
+          materialId: widget.materials?.selectedId);
       final where = await saveReport(_outDir, '04_ТЭО_Отчёт.pdf', pdf);
       if (mounted) {
         setState(() => _status =
@@ -189,7 +214,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
       _status = 'Формирование XLSX…';
     });
     try {
-      final xlsx = await _buildXlsxBytes(project);
+      final xlsx = await _buildXlsxBytes(project,
+          materialOptions: widget.materials?.all,
+          materialId: widget.materials?.selectedId);
       final where = await saveReport(_outDir, '05_Расчёт.xlsx', xlsx);
       if (mounted) {
         setState(() => _status =
