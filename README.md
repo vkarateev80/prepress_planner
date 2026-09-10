@@ -17,13 +17,18 @@
 | `services/payments` | FastAPI: подписка Pro (месяц 990 ₽ / год 9 900 ₽) — заказы, подтверждение (заглушка), вебхук (заглушка); токены проверяет через auth |
 | `services/license` | FastAPI: лицензии (триал/ключи/webhooks) — в прод-стек **не входит** (см. `SECURITY.md`) |
 | `deploy` | Комплект развёртывания: docker-compose (converter/auth/payments/web-nginx), nginx единого origin :8081, `install_new_server.sh`, `build_bundle.*`, README |
-| `agents/00..14` | Контракты субагентов (история исполнения) |
-| `docs/` | `HANDOFF.md`, `VERIFICATION.md`, `superpowers/specs|plans/` (спека и план) |
-| `docs/superpowers` | Спека `2026-09-02-prepress-planner-design.md` и план `2026-09-02-prepress-planner.md` |
+| `agents/00..14` | Контракты субагентов (история исполнения) + `agents/README.md` (индекс) |
+| `УСТАВ.md` | Устав проекта: миссия, принципы, роли, архитектурные правила, Definition of Done, релизный чек-лист |
+| `docs/` | `HANDOFF.md`, `VERIFICATION.md`, `specs/` (актуальные спецификации), `design/DESIGN_SYSTEM.md` (дизайн-система), `superpowers/specs|plans/` (историческая спека и план MVP) |
+| `docs/specs` | Спецификации 00–09: архитектура, домен, форматы данных, UI, сервисы/API, платформы, деплой, тесты, безопасность, roadmap |
+| `docs/design` | Дизайн-система: токены, компоненты, паттерны, доступность, контент-стиль |
 | `.github/workflows` | `ci.yml`, `release.yml` |
 | `fixtures/`, `samples/` | Эталонные файлы и образцы |
 
-**Ключевые документы (корень):**
+**Ключевые документы:**
+- `УСТАВ.md` — правила работы над проектом (обязателен к прочтению);
+- `docs/specs/README.md` — индекс спецификаций (архитектура, домен, форматы, UI, API, деплой, тесты, безопасность, roadmap);
+- `docs/design/DESIGN_SYSTEM.md` — дизайн-система (токены, компоненты, паттерны);
 - `SECURITY.md` — аудит безопасности 2026-09-07 и план устранения;
 - `РУКОВОДСТВО_ПОЛЬЗОВАТЕЛЯ.md` / `.pdf` — руководство пользователя;
 - `deploy/README.md` — развёртывание стека.
@@ -75,7 +80,7 @@ Python (для генерации золотых эталонов и вериф�
 - **Сборки:** Windows — `app\build\windows\x64\runner\Release\prepress_planner.exe`; Linux — через WSL (ярлык «Препресс-Планер (Linux)» на рабочем столе); web — статика на сервере.
 - **Раскрой:** список магнитных валов по умолчанию — `88, 96, 120, 176` (коммит `448dcba`).
 - **Безопасность:** аудит 2026-09-07 выполнен, исправления отложены — см. `SECURITY.md`.
-- **Git:** репозиторий GitHub `vkarateev80/prepress_planner`, ветка `master`, запушено (HEAD `448dcba`).
+- **Git:** репозиторий GitHub `vkarateev80/prepress_planner`, ветка `master`, запушено. Базовая линия документации — `bed533e` (см. `git log -1` для актуального HEAD).
 
 ## Сквозной сценарий (домен)
 
