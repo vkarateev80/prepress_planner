@@ -3,7 +3,8 @@
 /// Генерация — чистыми функциями ядра (buildTeoReportPdf/buildTeoXlsx/
 /// buildDxfText) через [heavy]: на desktop в изоляте, на web на главном
 /// потоке. Сохранение — платформенное [saveReport]: desktop пишет файлы в
-/// выбранную папку, web скачивает браузером. Кириллица PDF — встроенный
+/// выбранную папку, web скачивает браузером, на Android/iOS файлы попадают
+/// в каталог приложения (reports). Кириллица PDF — встроенный
 /// шрифт assets/fonts/DejaVuSans.ttf (rootBundle).
 library;
 
@@ -105,9 +106,20 @@ class _ReportsScreenState extends State<ReportsScreen> {
   /// Байты кириллического TTF для PDF (assets/fonts/DejaVuSans.ttf).
   Uint8List? _fontBytes;
 
-  /// Каталог записи на desktop (на web игнорируется — браузерный download).
+  /// Каталог записи на desktop (на web игнорируется — браузерный download,
+  /// на мобильных вместо него каталог приложения: см. saveReport).
   String get _outDir =>
       widget.store.directory.isEmpty ? '.' : widget.store.directory;
+
+  /// Текст статуса сохранения: на web файл скачивает браузер, на мобильных он
+  /// остаётся в каталоге приложения (путь песочницы пользователю не поможет),
+  /// на desktop показывается реальный путь записи.
+  String _savedText({
+    required String web,
+    required String mobile,
+    required String desktop,
+  }) =>
+      isWeb ? web : (isMobile ? mobile : desktop);
 
   /// Запись в журнал приложения (окно «Журнал событий» в шапке).
   void _log(String message, {LogLevel level = LogLevel.info}) =>
@@ -145,7 +157,10 @@ class _ReportsScreenState extends State<ReportsScreen> {
         Text(
           isWeb
               ? 'Экспорт: файлы будут скачаны браузером'
-              : 'Экспорт в папку: $_outDir',
+              : isMobile
+                  ? 'Экспорт: файлы сохраняются в каталог приложения '
+                      '(подкаталог reports)'
+                  : 'Экспорт в папку: $_outDir',
           style: Theme.of(context).textTheme.bodySmall,
         ),
         const SizedBox(height: 16),
@@ -194,11 +209,15 @@ class _ReportsScreenState extends State<ReportsScreen> {
           materialOptions: widget.materials?.all,
           materialId: widget.materials?.selectedId);
       final where = await saveReport(_outDir, '04_ТЭО_Отчёт.pdf', pdf);
+      final statusText = _savedText(
+        web: 'Экспортировано: 04_ТЭО_Отчёт.pdf',
+        mobile: 'PDF сохранён в каталог приложения: 04_ТЭО_Отчёт.pdf',
+        desktop: 'PDF сохранён: $where',
+      );
       if (mounted) {
-        setState(() => _status =
-            isWeb ? 'Экспортировано: 04_ТЭО_Отчёт.pdf' : 'PDF сохранён: $where');
+        setState(() => _status = statusText);
       }
-      _log(isWeb ? 'Экспортировано: 04_ТЭО_Отчёт.pdf' : 'PDF сохранён: $where');
+      _log(statusText);
     } catch (e) {
       if (mounted) setState(() => _status = 'Ошибка PDF: $e');
       _log('Ошибка PDF: $e', level: LogLevel.error);
@@ -218,11 +237,15 @@ class _ReportsScreenState extends State<ReportsScreen> {
           materialOptions: widget.materials?.all,
           materialId: widget.materials?.selectedId);
       final where = await saveReport(_outDir, '05_Расчёт.xlsx', xlsx);
+      final statusText = _savedText(
+        web: 'Экспортировано: 05_Расчёт.xlsx',
+        mobile: 'XLSX сохранён в каталог приложения: 05_Расчёт.xlsx',
+        desktop: 'XLSX сохранён: $where',
+      );
       if (mounted) {
-        setState(() => _status =
-            isWeb ? 'Экспортировано: 05_Расчёт.xlsx' : 'XLSX сохранён: $where');
+        setState(() => _status = statusText);
       }
-      _log(isWeb ? 'Экспортировано: 05_Расчёт.xlsx' : 'XLSX сохранён: $where');
+      _log(statusText);
     } catch (e) {
       if (mounted) setState(() => _status = 'Ошибка XLSX: $e');
       _log('Ошибка XLSX: $e', level: LogLevel.error);
@@ -248,9 +271,11 @@ class _ReportsScreenState extends State<ReportsScreen> {
         await saveReport(_outDir, '03_Раскрой.dxf',
             Uint8List.fromList(utf8.encode(arr)));
       }
-      final statusText = isWeb
-          ? 'Экспортировано: ${names.join(', ')}'
-          : 'DXF сохранены в $_outDir';
+      final statusText = _savedText(
+        web: 'Экспортировано: ${names.join(', ')}',
+        mobile: 'DXF сохранены в каталог приложения: ${names.join(', ')}',
+        desktop: 'DXF сохранены в $_outDir',
+      );
       if (mounted) setState(() => _status = statusText);
       _log(statusText);
     } catch (e) {

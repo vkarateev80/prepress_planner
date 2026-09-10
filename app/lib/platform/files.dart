@@ -1,5 +1,6 @@
 /// Файловые операции: desktop читает по путям, web — браузерный picker и
-/// download. Общий API один; реализации условные.
+/// download, Android/iOS — системный выбор файла и запись в каталог приложения.
+/// Общий API один; реализации условные.
 library;
 
 import 'dart:typed_data';
@@ -34,11 +35,13 @@ bool isDir(String path) => impl.isDir(path);
 /// Прочитать файл целиком по пути (desktop).
 Future<Uint8List> readBytes(String path) => impl.readBytes(path);
 
-/// Диалог выбора одного файла (web: <input type=file>); на desktop возвращает
-/// null — там выбор идёт через браузер папок + [readBytes].
+/// Диалог выбора одного файла (web: <input type=file>; Android/iOS: системный
+/// picker file_selector); на desktop возвращает null — там выбор идёт через
+/// браузер папок + [readBytes].
 Future<FilePick?> pickSingleFile() => impl.pickSingleFile();
 
 /// Сохранить/скачать файл для пользователя (web: anchor download; desktop:
-/// пишет в домашний каталог и возвращает путь).
+/// пишет в домашний каталог; Android/iOS: в каталог приложения) и возвращает
+/// путь/имя записанного файла.
 Future<String> saveFileForUser(String fileName, Uint8List bytes) =>
     impl.saveFileForUser(fileName, bytes);

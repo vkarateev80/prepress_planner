@@ -1,11 +1,18 @@
-/// Сохранение отчёта на VM/desktop: запись файла в каталог [dirName].
+/// Сохранение отчёта на VM: запись файла в каталог [dirName]; на Android/iOS
+/// каталог из UI недоступен для записи, поэтому отчёт кладётся в каталог
+/// приложения (reports) — путь возвращается для статуса/лога.
 library;
 
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'app_dirs.dart';
+
 Future<String> saveReport(String dirName, String fileName, Uint8List bytes) async {
-  final dir = dirName.isEmpty ? '.' : dirName;
+  // На desktop — как раньше: каталог из UI (относительный путь рядом с
+  // приложением). На мобильных подменяем его каталогом приложения.
+  final mobile = await mobileReportsDir();
+  final dir = mobile ?? (dirName.isEmpty ? '.' : dirName);
   final d = Directory(dir);
   if (!d.existsSync()) {
     d.createSync(recursive: true);

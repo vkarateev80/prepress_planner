@@ -7,11 +7,21 @@ version: 1.0.0+1
 environment:
   sdk: ^3.13.2
 
-# Только Flutter SDK + локальный пакет домена: pub.dev недоступен в среде
-# разработки, поэтому внешних зависимостей нет.
+# Flutter SDK + локальный пакет домена + официальные плагины для мобильных
+# сборок: path_provider (каталог данных приложения — на Android/iOS рабочий
+# каталог процесса недоступен для записи) и file_selector (системный выбор
+# файла вместо браузера папок desktop / <input type=file> на web).
 dependencies:
+  file_selector: ^1.1.0
   flutter:
     sdk: flutter
+  path_provider: ^2.1.6
+  # Точная версия (а не ^): 2.6.0 перешла на objective_c FFI с build hook, а
+  # сборщик хуков в этой рабочей копии не работает — путь к Flutter SDK
+  # (.tools/flutter-src/flutter) содержит пробел, и компиляция хука падает,
+  # ломая `flutter test`, сборку web и APK. 2.5.1 даёт тот же каталог Documents
+  # на iOS/macOS обычным плагином (SPM/CocoaPods), без build hook.
+  path_provider_foundation: 2.5.1
   prepress_core:
     path: ../packages/core
 

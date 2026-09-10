@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Разрешение cleartext (http) только для известных серверов проекта.
+  Android 9+ по умолчанию блокирует http, а сервер конвертации, аккаунтов и
+  оплат пока работает по http://193.233.193.12 (порты 8120/8121/8122),
+  локальный сервер конвертации — по http://localhost.
+  Глобальный android:usesCleartextTraffic НЕ включаем: остальной трафик
+  (например, будущие https-сервисы) остаётся под защитой платформы.
+  TODO: после перевода серверов на HTTPS этот файл и ссылку на него в
+  AndroidManifest.xml нужно удалить.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">193.233.193.12</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>

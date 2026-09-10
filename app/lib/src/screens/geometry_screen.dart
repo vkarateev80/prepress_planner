@@ -200,7 +200,10 @@ class _GeometryScreenState extends State<GeometryScreen> {
           padding: const EdgeInsets.all(8),
           child: Row(
             children: [
-              if (!isWeb) ...[
+              // Поле пути и «Обзор» есть только на desktop (браузер папок).
+              // На web и на мобильных путь не вводится: файл выбирается
+              // системным диалогом (браузерным / мобильным picker'ом).
+              if (!isWeb && !isMobile) ...[
                 Expanded(
                   child: Tooltip(
                     message: 'Путь к векторному файлу. Поддерживаются DXF, '
@@ -548,14 +551,15 @@ class _GeometryScreenState extends State<GeometryScreen> {
     );
   }
 
-  /// Источник импорта: на web — браузерный выбор файла (байты), на desktop —
-  /// путь из поля ввода (проверка существования) + чтение байтов.
+  /// Источник импорта: на web — браузерный выбор файла, на мобильных —
+  /// системный picker (в обоих случаях байты), на desktop — путь из поля ввода
+  /// (проверка существования) + чтение байтов.
   Future<void> _import() async {
     final project = widget.project;
     if (project == null) return;
 
     final _ImportFile src;
-    if (isWeb) {
+    if (isWeb || isMobile) {
       final pick = await pickSingleFile();
       if (pick == null || !mounted) return;
       src = _ImportFile(
@@ -712,9 +716,10 @@ class _GeometryScreenState extends State<GeometryScreen> {
   }
 
   /// Выбор векторного файла встроенным диалогом (без внешних плагинов).
-  /// Только desktop: на web файл выбирается браузерным диалогом [pickSingleFile].
+  /// Только desktop: на web и на мобильных файл выбирается системным диалогом
+  /// [pickSingleFile].
   Future<void> _browse() async {
-    if (isWeb) return;
+    if (isWeb || isMobile) return;
     final picked = await showDialog<String>(
       context: context,
       builder: (_) => _VectorFileDialog(startDir: homeDir),
@@ -732,7 +737,7 @@ class _GeometryScreenState extends State<GeometryScreen> {
   /// Удалённый адрес: «Проверить сервер» (проверить доступность).
   /// Адрес пользователю не показывается (скрыт).
   Widget _serverButton() {
-    final local = ConverterServer.isLocal(_converterBase);
+    final local = _serverIsLocal;
     final Widget icon;
     final String label;
     if (_serverStarting) {
@@ -761,6 +766,12 @@ class _GeometryScreenState extends State<GeometryScreen> {
     );
   }
 
+  /// Локальный ли сервер конвертации можно поднять прямо здесь. На Android/iOS
+  /// дочерний процесс uvicorn запустить нельзя, поэтому мобильные всегда идут
+  /// по ветке «Проверить сервер», даже если адрес локальный.
+  bool get _serverIsLocal =>
+      !isMobile && ConverterServer.isLocal(_converterBase);
+
   /// Проверка сервера конвертации: для локального адреса — запуск uvicorn,
   /// для удалённого — только проверка доступности. Результат — в статус
   /// экрана и в журнал событий (без показа адреса).
@@ -774,7 +785,7 @@ class _GeometryScreenState extends State<GeometryScreen> {
     try {
       final server = ConverterServer(baseUrl: _converterBase);
       final String? err;
-      if (ConverterServer.isLocal(_converterBase)) {
+      if (_serverIsLocal) {
         err = await server.ensureRunning();
       } else {
         // Удалённый адрес: запускать локально бессмысленно — только проба.
@@ -790,7 +801,7 @@ class _GeometryScreenState extends State<GeometryScreen> {
       } else {
         setState(() {
           _serverUp = false;
-          _status = ConverterServer.isLocal(_converterBase)
+          _status = _serverIsLocal
               ? 'Ошибка запуска сервера конвертации: $err'
               : 'Сервер конвертации недоступен: $err. Проверьте сеть.';
         });
