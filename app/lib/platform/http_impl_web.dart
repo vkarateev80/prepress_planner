@@ -35,6 +35,27 @@ Future<HttpResponse> httpJsonGet(
 }) =>
     _send('GET', url, headers: headers, timeout: timeout);
 
+Future<HttpResponse> httpJsonPatch(
+  String url, {
+  Map<String, String>? headers,
+  Object? json,
+  Duration timeout = const Duration(seconds: 8),
+}) async {
+  final body = json == null ? null : jsonEncode(json);
+  return _send('PATCH', url,
+      headers: _withJson(headers),
+      body: body,
+      responseType: 'text',
+      timeout: timeout);
+}
+
+Future<HttpResponse> httpJsonDelete(
+  String url, {
+  Map<String, String>? headers,
+  Duration timeout = const Duration(seconds: 8),
+}) =>
+    _send('DELETE', url, headers: headers, timeout: timeout);
+
 Future<HttpResponse> httpRawPost(
   String url, {
   Map<String, String>? headers,
@@ -67,6 +88,7 @@ Future<HttpResponse> httpMultipartPost(
   required String fileName,
   required List<int> fileBytes,
   Map<String, String> fields = const {},
+  Map<String, String>? headers,
   Duration timeout = const Duration(seconds: 30),
 }) async {
   final fd = html.FormData();
@@ -75,7 +97,7 @@ Future<HttpResponse> httpMultipartPost(
   final file = html.File([fileBytes], fileName);
   fd.appendBlob(fieldName, file, fileName);
   return _send('POST', url,
-      body: fd, responseType: 'text', timeout: timeout);
+      headers: headers, body: fd, responseType: 'text', timeout: timeout);
 }
 
 Map<String, String>? _withJson(Map<String, String>? h) {

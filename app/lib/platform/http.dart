@@ -46,6 +46,22 @@ Future<HttpResponse> httpJsonGet(
 }) =>
     impl.httpJsonGet(url, headers: headers, timeout: timeout);
 
+Future<HttpResponse> httpJsonPatch(
+  String url, {
+  Map<String, String>? headers,
+  Object? json,
+  Duration timeout = const Duration(seconds: 8),
+}) =>
+    impl.httpJsonPatch(url,
+        headers: headers, json: json, timeout: timeout);
+
+Future<HttpResponse> httpJsonDelete(
+  String url, {
+  Map<String, String>? headers,
+  Duration timeout = const Duration(seconds: 8),
+}) =>
+    impl.httpJsonDelete(url, headers: headers, timeout: timeout);
+
 Future<HttpResponse> httpRawPost(
   String url, {
   Map<String, String>? headers,
@@ -70,6 +86,7 @@ Future<HttpResponse> httpMultipartPost(
   required String fileName,
   required List<int> fileBytes,
   Map<String, String> fields = const {},
+  Map<String, String>? headers,
   Duration timeout = const Duration(seconds: 30),
 }) =>
     impl.httpMultipartPost(
@@ -78,5 +95,6 @@ Future<HttpResponse> httpMultipartPost(
       fileName: fileName,
       fileBytes: fileBytes,
       fields: fields,
+      headers: headers,
       timeout: timeout,
     );

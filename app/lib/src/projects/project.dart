@@ -6,6 +6,7 @@ import 'dart:convert';
 import 'package:prepress_core/prepress_core.dart';
 
 import '../../platform/json_store.dart';
+import 'cloud_projects.dart';
 
 /// Сериализация CamPath: {points: [[x,y],...], closed, layer}.
 Map<String, dynamic> camPathToJson(CamPath p) => {
@@ -288,13 +289,24 @@ MaterialResult materialResultFromJson(Map<String, dynamic> j) {
   );
 }
 
-/// Простое хранилище проектов: JSON-файлы (desktop) / localStorage (web).
+/// Хранилище проектов.
+///
+/// Два режима (задача `flutter-web-adapt`):
+/// * **облачный** — если подключён [api] (web, ADR-6) и есть сессия аккаунта
+///   ([tokenProvider] вернул токен): CRUD через `/api/projects` (§12.4);
+/// * **локальный** — иначе: JSON-файлы (desktop) / localStorage (web).
 class ProjectStore {
   /// Имя каталога/префикса хранилища (для UI и сообщений).
   final String directory;
   final JsonStore _store;
-  ProjectStore(String directory)
-      : directory = directory,
+  final ProjectsApi? api;
+  final Future<String?> Function()? tokenProvider;
+
+  ProjectStore(
+    String directory, {
+    this.api,
+    this.tokenProvider,
+  })  : directory = directory,
         _store = JsonStore(directory);
 
   static String _sanitize(String s) =>
@@ -302,16 +314,73 @@ class ProjectStore {
 
   String _relFor(String name) => '${_sanitize(name)}.json';
 
+  /// Токен облачного режима: null → локальное хранилище.
+  Future<String?> _cloudToken() async {
+    if (api == null) return null;
+    final t = await tokenProvider?.call();
+    return (t == null || t.isEmpty) ? null : t;
+  }
+
+  static Map<String, dynamic>? _findByName(
+      List<Map<String, dynamic>> items, String name) {
+    for (final e in items) {
+      if (e['name'] == name) return e;
+    }
+    return null;
+  }
+
   Future<void> save(Project p) async {
+    final token = await _cloudToken();
+    if (token != null) {
+      final state = p.toJson();
+      final items = await api!.list(token);
+      final existing = _findByName(items, p.name);
+      if (existing != null) {
+        await api!.patch(token, existing['id'] as String, state: state);
+      } else {
+        await api!.create(token, p.name, state);
+      }
+      return;
+    }
     await _store.write(_relFor(p.name), jsonEncode(p.toJson()));
   }
 
   Future<Project?> load(String name) async {
+    final token = await _cloudToken();
+    if (token != null) {
+      final items = await api!.list(token);
+      final found = _findByName(items, name);
+      if (found == null) return null;
+      final proj = await api!.get(token, found['id'] as String);
+      final state = proj['state'];
+      if (state is! Map) return null;
+      return Project.fromJson(state.cast<String, dynamic>());
+    }
     final s = await _store.read(_relFor(name));
     if (s == null) return null;
     final j = jsonDecode(s);
     return Project.fromJson((j as Map).cast<String, dynamic>());
   }
 
-  Future<List<String>> listNames() async => _store.listJsonNames();
+  Future<List<String>> listNames() async {
+    final token = await _cloudToken();
+    if (token != null) {
+      final items = await api!.list(token);
+      return [for (final e in items) e['name'] as String? ?? ''];
+    }
+    return _store.listJsonNames();
+  }
+
+  /// Идентификатор проекта в облаке (создаёт при отсутствии) — нужен для
+  /// загрузки файлов (`POST /api/projects/{id}/files`, ADR-7).
+  /// null — вне облачного режима (нет api либо нет сессии).
+  Future<String?> ensureCloudId(Project p) async {
+    final token = await _cloudToken();
+    if (token == null) return null;
+    final items = await api!.list(token);
+    final existing = _findByName(items, p.name);
+    if (existing != null) return existing['id'] as String;
+    final created = await api!.create(token, p.name, p.toJson());
+    return created['id'] as String;
+  }
 }

@@ -27,7 +27,42 @@ Future<HttpResponse> httpJsonGet(
 }) =>
     httpRawGet(url, headers: headers, timeout: timeout);
 
+Future<HttpResponse> httpJsonPatch(
+  String url, {
+  Map<String, String>? headers,
+  Object? json,
+  Duration timeout = const Duration(seconds: 8),
+}) {
+  final body = json == null ? null : jsonEncode(json);
+  return _send('PATCH', url,
+      headers: headers,
+      body: body == null ? null : utf8.encode(body),
+      contentType: 'application/json',
+      timeout: timeout);
+}
+
+Future<HttpResponse> httpJsonDelete(
+  String url, {
+  Map<String, String>? headers,
+  Duration timeout = const Duration(seconds: 8),
+}) =>
+    _send('DELETE', url, headers: headers, timeout: timeout);
+
 Future<HttpResponse> httpRawPost(
+  String url, {
+  Map<String, String>? headers,
+  List<int>? body,
+  String? contentType,
+  Duration timeout = const Duration(seconds: 30),
+}) =>
+    _send('POST', url,
+        headers: headers,
+        body: body,
+        contentType: contentType,
+        timeout: timeout);
+
+Future<HttpResponse> _send(
+  String method,
   String url, {
   Map<String, String>? headers,
   List<int>? body,
@@ -36,7 +71,7 @@ Future<HttpResponse> httpRawPost(
 }) async {
   final client = HttpClient()..connectionTimeout = timeout;
   try {
-    final req = await client.postUrl(Uri.parse(url)).timeout(timeout);
+    final req = await client.openUrl(method, Uri.parse(url)).timeout(timeout);
     if (contentType != null) {
       req.headers.contentType = ContentType.parse(contentType);
     }
@@ -79,6 +114,7 @@ Future<HttpResponse> httpMultipartPost(
   required String fileName,
   required List<int> fileBytes,
   Map<String, String> fields = const {},
+  Map<String, String>? headers,
   Duration timeout = const Duration(seconds: 30),
 }) async {
   final boundary = '----pp_${DateTime.now().microsecondsSinceEpoch}';
@@ -105,6 +141,7 @@ Future<HttpResponse> httpMultipartPost(
   buf.add(fileBytes);
   buf.add(utf8.encode('\r\n--$boundary--\r\n'));
   return httpRawPost(url,
+      headers: headers,
       body: buf.takeBytes(),
       contentType: 'multipart/form-data; boundary=$boundary',
       timeout: timeout);

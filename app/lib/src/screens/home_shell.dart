@@ -7,6 +7,8 @@ import '../../license/license_controller.dart';
 import '../../license/paywall_screen.dart';
 import '../../license/account_screen.dart';
 import '../../platform/open_url.dart';
+import '../converter/api_converter.dart';
+import '../converter/converter_api.dart';
 import '../logs/app_log.dart';
 import '../projects/project.dart';
 import '../widgets/log_window.dart';
@@ -86,6 +88,27 @@ class _HomeShellState extends State<HomeShell> {
     showProSheet(context, lic, feature: feature);
   }
 
+  /// Конвертер закрытых форматов для текущего окружения:
+  /// * web-сборка + `services/api` в store → путь через api (ADR-7):
+  ///   multipart-загрузка с `convert=svg` и скачание `/files/{id}/content`;
+  ///   при отсутствии сессии/облачного проекта — фолбэк на прямой
+  ///   `services/converter` (`/convert` через edge nginx);
+  /// * desktop (api не подключён) → null, GeometryScreen использует
+  ///   прежний `ConverterApi` (поведение не меняется).
+  Converter? _closedConverter() {
+    final api = widget.store.api;
+    if (api == null) return null;
+    return ApiConverter(
+      api: api,
+      tokenProvider: () async => widget.license?.sessionToken,
+      projectIdProvider: () async {
+        final p = project;
+        if (p == null) return null;
+        return widget.store.ensureCloudId(p);
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final pages = <Widget>[
@@ -97,7 +120,11 @@ class _HomeShellState extends State<HomeShell> {
         onNeedPro: () => _requirePro(
             'Второй проект доступен в Pro (Free — 1 проект)'),
       ),
-      GeometryScreen(project: project, onChange: _update),
+      GeometryScreen(
+        project: project,
+        onChange: _update,
+        converter: _closedConverter(),
+      ),
       LayoutScreen(
         project: project,
         onChange: _update,

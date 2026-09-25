@@ -245,9 +245,16 @@ CP=3.175, cyl=web=300, mode=count, count=5000`: получены `9×5`, `5040`,
   22 проверки), но **генерация отчёта по запросу API ещё не подключена**
   (`POST /api/projects/{id}/reports/{pdf|xlsx|dxf}` → сохранение в хранилище
   + запись в `reports`) — следующая задача.
-- **`flutter-web-adapt`**: перевод UI на `/api/projects/...` (picker →
-  multipart → метаданные), серверный путь конвертации вместо прямого
-  `/convert` из браузера, blob-скачивание через `GET /api/files/{id}/download`.
+- **`flutter-web-adapt`** (начато): проекты переведены на `/api/projects/...` —
+  `ProjectStore` в web-сборке при активной сессии хранит состояние проекта в
+  `state_json` (`app/lib/src/projects/cloud_projects.dart`, env `PP_API_URL`);
+  dev-nginx (`deploy/nginx/pp-web.conf`) получил `location /api/`. Конвертация
+  закрытых форматов идёт сервер-к-серверу (ADR-7): `ApiConverter`
+  (`app/lib/src/converter/api_converter.dart`) → multipart
+  `POST /api/projects/{id}/files` (`convert=svg`, синхронно) →
+  `GET /api/files/{id}/content?format=svg`; без сессии/проекта — фолбэк на
+  прямой `/convert`. Остаётся: blob-скачивание через
+  `GET /api/files/{id}/download`.
 - **Эксплуатация**: TLS-сертификаты (`deploy/nginx/certs`), тест против
   реального PostgreSQL (`PP_TEST_DB_URL`), ретеншен/бэкап bucket (lifecycle),
   проверка nginx-конфига `nginx -t` (в текущей среде Docker недоступен).

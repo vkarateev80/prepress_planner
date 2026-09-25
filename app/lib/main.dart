@@ -4,7 +4,9 @@ import 'license/account_client.dart';
 import 'license/entitlement_store.dart';
 import 'license/license_client.dart';
 import 'license/license_controller.dart';
+import 'platform/env.dart';
 import 'src/logs/app_log.dart';
+import 'src/projects/cloud_projects.dart';
 import 'src/projects/project.dart';
 import 'src/screens/home_shell.dart';
 
@@ -52,7 +54,17 @@ class _PrepressPlannerAppState extends State<PrepressPlannerApp> {
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF2E5A88)),
         useMaterial3: true,
       ),
-      home: HomeShell(store: ProjectStore('projects'), license: _license),
+      home: HomeShell(
+        store: ProjectStore(
+          'projects',
+          // Облачный путь проектов (flutter-web-adapt, ADR-6): web-сборка
+          // хранит проекты в services/api при активной сессии; desktop и
+          // анонимный режим продолжают работать с локальным хранилищем.
+          api: isWeb ? ProjectsApi() : null,
+          tokenProvider: () async => _license.sessionToken,
+        ),
+        license: _license,
+      ),
     );
   }
 }

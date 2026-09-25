@@ -48,6 +48,9 @@ class LicenseController extends ChangeNotifier {
   bool get loggedIn => _session != null;
   String? get accountEmail => _session?.email;
 
+  /// Bearer-токен сессии (для облачных вызовов, например `/api/projects`).
+  String? get sessionToken => _session?.token;
+
   /// Идентификатор этого устройства (machine_id) — device_id сессии.
   String? _deviceId;
 
