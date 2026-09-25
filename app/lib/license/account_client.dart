@@ -1,10 +1,12 @@
 /// Клиенты аккаунта: авторизация (auth) и оплата (payments).
 ///
 /// Без внешних pub-пакетов: общий HTTP-слой (dart:io на desktop, XHR на web).
-/// Токен (Bearer) выдаёт auth и хранит СЕРВЕРНУЮ сессию (лимит устройств 1/1:
-/// новый вход вытесняет старый); payments проверяет токен внутренним вызовом
-/// auth. Адреса: env PP_AUTH_URL/PP_PAYMENTS_URL (desktop), на web — тот же
-/// origin (проксирование /auth, /payments на VPS).
+/// Токен (Bearer) выдаёт auth и хранит СЕРВЕРНУЮ сессию; лимит устройств 1/1
+/// в SaaS отсутствует (auth v0.3.0: мультисессии, организации/роли) — этот
+/// desktop-клиент остаётся только как совместимость и заменяется SaaS-клиентом
+/// auth/payments (задача flutter-web-adapt). Адреса: env PP_AUTH_URL/
+/// PP_PAYMENTS_URL (desktop), на web — тот же origin (проксирование /auth,
+/// /payments, ADR-6); зашитых IP нет.
 library;
 
 import 'dart:async';
@@ -198,8 +200,10 @@ class AuthApi {
   final String baseUrl;
   AuthApi({String? baseUrl}) : baseUrl = baseUrl ?? defaultUrl();
 
+  /// Адрес по умолчанию: env (desktop) либо тот же origin (web, ADR-6).
+  /// Зашитый IP удалён: пусто = относительный `/auth/...` того же origin.
   static String defaultUrl() =>
-      envOrDefault('PP_AUTH_URL', 'http://193.233.193.12:8121');
+      envOrDefault('PP_AUTH_URL', isWeb ? '' : 'http://127.0.0.1:8121');
 
   static const _timeout = Duration(seconds: 8);
   static const _unavailable = ApiException('Сервер авторизации недоступен. '
@@ -323,8 +327,9 @@ class PaymentsApi {
   final String baseUrl;
   PaymentsApi({String? baseUrl}) : baseUrl = baseUrl ?? defaultUrl();
 
+  /// Адрес по умолчанию: env (desktop) либо тот же origin (web, ADR-6).
   static String defaultUrl() =>
-      envOrDefault('PP_PAYMENTS_URL', 'http://193.233.193.12:8122');
+      envOrDefault('PP_PAYMENTS_URL', isWeb ? '' : 'http://127.0.0.1:8122');
 
   static const _timeout = Duration(seconds: 8);
   static const _unavailable =

@@ -6,11 +6,13 @@ import 'package:flutter/material.dart';
 import '../../license/license_controller.dart';
 import '../../license/paywall_screen.dart';
 import '../../license/account_screen.dart';
+import '../../platform/open_url.dart';
 import '../logs/app_log.dart';
 import '../projects/project.dart';
 import '../widgets/log_window.dart';
 import 'geometry_screen.dart';
 import 'layout_screen.dart';
+import 'legal/legal_screen.dart';
 import 'projects_screen.dart';
 import 'reports_screen.dart';
 import 'teo_screen.dart';
@@ -56,7 +58,7 @@ class _HomeShellState extends State<HomeShell> {
     widget.store.save(p); // fire-and-forget
   }
 
-  /// Pro-вкладки (всё, кроме «Проекты» и «Раскрой»).
+  /// Pro-вкладки (всё, кроме «Проекты»).
   static bool _isProTab(int i) => i == 1 || i == 3 || i == 4;
 
   bool _tabAllowed(int i) {
@@ -105,7 +107,53 @@ class _HomeShellState extends State<HomeShell> {
       ),
       TeoScreen(project: project, onChange: _update),
       ReportsScreen(project: project, store: widget.store),
+      const LegalScreen(),
     ];
+
+    // Футер со ссылкой на правовую информацию
+    Widget footer(BuildContext context) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(
+                alpha: 0.4,
+              ),
+          border: Border(
+            top: BorderSide(
+              color: Theme.of(context).colorScheme.outlineVariant.withValues(
+                    alpha: 0.3,
+                  ),
+              width: 0.5,
+            ),
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Expanded(
+              child: TextButton.icon(
+                icon: const Icon(Icons.article_outlined, size: 16),
+                label: const Text('Юридическая информация'),
+                onPressed: () {
+                  // Web: открыть в новой вкладке; desktop: системный браузер.
+                  openUrlExternal('https://prepressplan.ru/legal');
+                },
+                style: TextButton.styleFrom(
+                  foregroundColor: Theme.of(context).colorScheme.primary,
+                ),
+              ),
+            ),
+            const SizedBox(width: 16),
+            Text(
+              '\u00A9 ${DateTime.now().year} Препресс-Планер',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
     return Scaffold(
       appBar: AppBar(
         title: Text(project == null
@@ -127,8 +175,7 @@ class _HomeShellState extends State<HomeShell> {
                 ),
                 onPressed: () => showLogWindow(context),
               );
-            },
-          ),
+            }),
           if (widget.license != null) ...[
             AccountButton(license: widget.license!),
             Padding(
@@ -141,39 +188,50 @@ class _HomeShellState extends State<HomeShell> {
       body: LayoutBuilder(builder: (context, constraints) {
         final wide = constraints.maxWidth > 700;
         if (wide) {
-          return Row(
+          return Column(
             children: [
-              NavigationRail(
-                selectedIndex: _index,
-                onDestinationSelected: _selectTab,
-                labelType: NavigationRailLabelType.all,
-                destinations: const [
-                  NavigationRailDestination(
-                      icon: Icon(Icons.folder_outlined),
-                      selectedIcon: Icon(Icons.folder),
-                      label: Text('Проекты')),
-                  NavigationRailDestination(
-                      icon: Icon(Icons.timeline),
-                      label: Text('Геометрия')),
-                  NavigationRailDestination(
-                      icon: Icon(Icons.grid_view),
-                      label: Text('Раскрой')),
-                  NavigationRailDestination(
-                      icon: Icon(Icons.calculate_outlined),
-                      label: Text('ТЭО')),
-                  NavigationRailDestination(
-                      icon: Icon(Icons.description_outlined),
-                      label: Text('Отчёты')),
-                ],
+              Expanded(
+                child: Row(
+                  children: [
+                    NavigationRail(
+                      selectedIndex: _index,
+                      onDestinationSelected: _selectTab,
+                      labelType: NavigationRailLabelType.all,
+                      destinations: const [
+                        NavigationRailDestination(
+                            icon: Icon(Icons.folder_outlined),
+                            selectedIcon: Icon(Icons.folder),
+                            label: Text('Проекты')),
+                        NavigationRailDestination(
+                            icon: Icon(Icons.timeline),
+                            label: Text('Геометрия')),
+                        NavigationRailDestination(
+                            icon: Icon(Icons.grid_view),
+                            label: Text('Раскрой')),
+                        NavigationRailDestination(
+                            icon: Icon(Icons.calculate_outlined),
+                            label: Text('ТЭО')),
+                        NavigationRailDestination(
+                            icon: Icon(Icons.description_outlined),
+                            label: Text('Отчёты')),
+                        NavigationRailDestination(
+                            icon: Icon(Icons.article_outlined),
+                            label: Text('Юридическая')),
+                      ],
+                    ),
+                    const VerticalDivider(width: 1),
+                    Expanded(child: pages[_index]),
+                  ],
+                ),
               ),
-              const VerticalDivider(width: 1),
-              Expanded(child: pages[_index]),
+              footer(context),
             ],
           );
         }
         return Column(
           children: [
             Expanded(child: pages[_index]),
+            footer(context),
             NavigationBar(
               selectedIndex: _index,
               onDestinationSelected: _selectTab,
@@ -188,6 +246,8 @@ class _HomeShellState extends State<HomeShell> {
                     icon: Icon(Icons.calculate_outlined), label: 'ТЭО'),
                 NavigationDestination(
                     icon: Icon(Icons.description_outlined), label: 'Отчёты'),
+                NavigationDestination(
+                    icon: Icon(Icons.article_outlined), label: 'Юридическая информация'),
               ],
             ),
           ],

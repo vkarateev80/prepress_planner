@@ -39,12 +39,15 @@ services:
       PP_AUTH_SECRET: ${PP_AUTH_SECRET:?задайте PP_AUTH_SECRET в .env}
       PP_TOKEN_TTL: "720"
       PP_RESET_TTL: "30"
-      # Почта для сброса пароля (необязательно; без неё код — dev-режим).
+      # 1 (по умолчанию) — регистрация без org_name создаёт личную организацию.
+      PP_DEFAULT_ORG: ${PP_DEFAULT_ORG:-1}
+      # Почта для сброса пароля (в проде обязательна: код в ответе не отдаётся).
       PP_SMTP_HOST: ${PP_SMTP_HOST:-}
       PP_SMTP_PORT: ${PP_SMTP_PORT:-587}
       PP_SMTP_USER: ${PP_SMTP_USER:-}
       PP_SMTP_PASSWORD: ${PP_SMTP_PASSWORD:-}
       PP_SMTP_FROM: ${PP_SMTP_FROM:-}
+      PP_SMTP_SSL: ${PP_SMTP_SSL:-}
     volumes:
       - auth-data:/srv/auth/data
     healthcheck:
@@ -64,6 +67,18 @@ services:
     environment:
       PP_DATA_DIR: /srv/payments/data
       PP_AUTH_URL: http://auth:8121   # внутренний адрес auth в этой сети
+      # ЮKassa (ADR-3). Секреты — только через .env, в репозитории их нет.
+      # Пустой YUKASSA_WEBHOOK_SECRET → вебхук отклоняется (fail closed).
+      YUKASSA_SHOP_ID: ${YUKASSA_SHOP_ID:-}
+      YUKASSA_SECRET_KEY: ${YUKASSA_SECRET_KEY:-}
+      YUKASSA_WEBHOOK_SECRET: ${YUKASSA_WEBHOOK_SECRET:-}
+      YUKASSA_API_URL: ${YUKASSA_API_URL:-https://api.yookassa.ru/v3}
+      PP_TRIAL_DAYS: ${PP_TRIAL_DAYS:-15}
+      PP_PRO_MONTH_PRICE_RUB: ${PP_PRO_MONTH_PRICE_RUB:-990}
+      PP_PRO_YEAR_PRICE_RUB: ${PP_PRO_YEAR_PRICE_RUB:-9900}
+      PP_PUBLIC_BASE: ${PP_PUBLIC_BASE:-}
+      # DB_URL: пусто → SQLite в PP_DATA_DIR; PostgreSQL — раскомментируйте.
+      # DB_URL: postgresql://pp_user:${PP_DB_PASSWORD:-pp_secret}@postgresql:5432/prepress_saas
     volumes:
       - payments-data:/srv/payments/data
     healthcheck:
@@ -75,7 +90,103 @@ services:
       start_period: 5s
     restart: unless-stopped
 
+  # === API (проекты/файлы: гибрид S3+PostgreSQL, ADR-5; изоляция по org, N-4) ===
+  # Публикует 8100 для dev-сборки web-клиента. Хранилище объектов:
+  #   PP_STORAGE_BACKEND=memory — без MinIO (быстрая локальная проверка API);
+  #   PP_STORAGE_BACKEND=s3 + профиль storage — MinIO (гибридное хранилище).
+  api:
+    build: ./api
+    image: pp-api:latest
+    ports:
+      - "8100:8100"
+    environment:
+      PP_DATA_DIR: /srv/api/data
+      PP_AUTH_URL: http://auth:8121
+      PP_BILLING_URL: http://payments:8122
+      CONVERTER_URL: http://converter:8120   # ADR-7: только сервер-к-серверу
+      DOMAIN_WORKER_URL: ${DOMAIN_WORKER_URL:-http://domain-worker:8101}
+      PP_STORAGE_BACKEND: ${PP_STORAGE_BACKEND:-memory}
+      OBJECT_STORAGE_ENDPOINT: ${OBJECT_STORAGE_ENDPOINT:-http://minio:9000}
+      OBJECT_STORAGE_PUBLIC_ENDPOINT: ${OBJECT_STORAGE_PUBLIC_ENDPOINT:-http://127.0.0.1:9010}
+      OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:-prepress-saas}
+      OBJECT_STORAGE_ACCESS_KEY: ${PP_OBJECT_STORAGE_ACCESS_KEY:-minioadmin}
+      OBJECT_STORAGE_SECRET_KEY: ${PP_OBJECT_STORAGE_SECRET_KEY:-minioadmin}
+      OBJECT_STORAGE_PREFIX: org
+      PP_MAX_MB: "50"
+      PP_PRESIGN_TTL: "300"
+      PP_MAX_FILE_VERSIONS: "20"
+      PP_AUTH_REQUIRED: ${PP_AUTH_REQUIRED:-1}
+      PP_ENTITLEMENT_ENFORCE: ${PP_ENTITLEMENT_ENFORCE:-0}
+      # DB_URL: пусто → SQLite в PP_DATA_DIR (dev); PostgreSQL — deploy/docker-compose.yml.
+      DB_URL: ${DB_URL:-}
+    volumes:
+      - api-data:/srv/api/data
+    depends_on:
+      - auth
+      - converter
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/healthz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # === Домен — серверный Dart-воркер (ADR-2) ===
+  # Канонический исполнитель packages/core (чистый Dart VM + stdlib).
+  # Порт 8101 наружу НЕ публикуется: вызовы только сервер-к-серверу от api
+  # (DOMAIN_WORKER_URL=http://domain-worker:8101).
+  domain-worker:
+    build:
+      context: ../
+      dockerfile: Dockerfile.domain-worker
+    image: pp-domain-worker:latest
+    environment:
+      PP_DATA_DIR: /srv/domain/data
+      PP_DOMAIN_PORT: "8101"
+      PP_DOMAIN_MAX_BODY_MB: "96"
+      PP_DOMAIN_TIMEOUT: "180"
+    volumes:
+      # Исходники домена — read-only: эталонная математика не изменяется (N-1).
+      - ../packages/core:/workspace/packages/core:ro
+      - domain-data:/srv/domain/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8101/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # === S3-совместимое объектное хранилище (ADR-5), профиль `storage` ===
+  # Запуск с гибридным хранилищем:
+  #   docker compose --profile storage up -d --build
+  #   PP_STORAGE_BACKEND=s3 OBJECT_STORAGE_ENDPOINT=http://minio:9000
+  # Bucket создаёт api при старте; публичного доступа нет — только presigned URL.
+  minio:
+    image: minio/minio:latest
+    profiles: ["storage"]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${PP_OBJECT_STORAGE_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${PP_OBJECT_STORAGE_SECRET_KEY:-minioadmin}
+    ports:
+      - "9010:9000"   # dev: endpoint для presigned URL (в проде — /s3/ через nginx)
+      - "9011:9001"   # консоль администратора (dev)
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
 volumes:
   converter-data:
   auth-data:
   payments-data:
+  api-data:
+  minio-data:
+  domain-data:

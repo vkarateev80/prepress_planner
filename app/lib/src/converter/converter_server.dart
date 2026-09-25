@@ -18,12 +18,20 @@ class ConverterServer {
 
   ConverterServer({String? baseUrl}) : baseUrl = baseUrl ?? defaultBaseUrl();
 
+  /// Адрес по умолчанию: env `PP_CONVERTER_URL` (desktop/VM), на web — тот же
+  /// origin (ADR-1/ADR-6). Зашитый IP удалён: пусто = относительные URL.
+  /// Для desktop дефолт остаётся локальным сервером разработки (8120).
   static String defaultBaseUrl() =>
-      envOrDefault('PP_CONVERTER_URL', 'http://193.233.193.12:8120');
+      envOrDefault('PP_CONVERTER_URL', isWeb ? '' : _localDefault);
+
+  /// Локальный адрес сервера разработки (desktop): `converter_server` умеет
+  /// поднимать его сам, если он не отвечает.
+  static const String _localDefault = 'http://127.0.0.1:8120';
 
   /// Локальный ли адрес (только для такого можно поднять uvicorn на этом ПК;
   /// в браузере локальный запуск невозможен в принципе).
   static bool isLocal(String baseUrl) {
+    if (baseUrl.isEmpty) return false; // same-origin: процессом браузер не управляет
     final uri = Uri.tryParse(baseUrl);
     if (uri == null || !uri.hasScheme) return false;
     final host = uri.host;

@@ -1,0 +1,14 @@
+# Анализ domain-worker: тот же набор правил, что и у packages/core
+# (package:lints недоступен — pub.dev в этой среде нет, поэтому только
+# встроенные анализаторы Dart SDK и минимальный набор правил).
+analyzer:
+  language:
+    strict-casts: true
+    strict-raw-types: true
+  errors:
+    unused_import: warning
+
+linter:
+  rules:
+    - prefer_final_locals
+    - unnecessary_brace_in_string_interps

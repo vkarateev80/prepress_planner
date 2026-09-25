@@ -3,6 +3,7 @@
 library;
 
 import 'dart:async';
+// ignore: deprecated_member_use -- dart:html остаётся: pub.dev недоступен, package:web не установить
 import 'dart:html' as html;
 import 'dart:typed_data';
 

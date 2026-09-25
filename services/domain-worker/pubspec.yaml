@@ -1,0 +1,20 @@
+name: domain_worker
+description: "Серверный Dart-воркер домена «Препресс-Планер» (ADR-2): канонический исполнитель packages/core (parse/analyze/heal/pattern/calc/variants/teo) по HTTP. Чистый Dart VM + stdlib, без pub.dev."
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+# ВНИМАНИЕ: pub.dev недоступен в этой среде — НЕ добавлять зависимости.
+# Единственная зависимость — path-зависимость на домен (packages/core),
+# которая резолвится офлайн (`dart pub get --offline`) из локального
+# каталога и не требует сети. См. README, раздел «Подключение packages/core».
+dependencies:
+  prepress_core:
+    path: ../../packages/core
+
+dev_dependencies: {}
+
+executables:
+  domain_worker: domain_worker

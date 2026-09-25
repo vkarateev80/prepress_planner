@@ -1,0 +1,52 @@
+# domain-worker — серверный исполнитель домена «Препресс-Планер» (ADR-2).
+#
+# Сборка (из корня репозитория, контекст — корень монорепо):
+#   docker build -f Dockerfile.domain-worker -t pp-domain-worker:latest .
+#
+# Чистый Dart VM: сторонние пакеты не ставятся, единственная зависимость —
+# path-зависимость на packages/core (резолвится офлайн: `dart pub get --offline`).
+# Сеть при сборке нужна только для базовых образов (dart / debian).
+
+# ---------- 1. Сборка: компиляция AOT-исполняемого файла ----------
+FROM dart:stable AS build
+
+WORKDIR /src
+
+# Домен (эталон; копируется как read-only источник, не изменяется).
+COPY packages/core /src/packages/core
+# Воркер.
+COPY services/domain-worker /src/services/domain-worker
+
+WORKDIR /src/services/domain-worker
+# --offline: pub.dev недоступен по требованиям среды (PRD §8.1, N-8).
+# Анализ — только продуктовый код (test/tool требуют fixtures из корня репо,
+# в образ они не копируются).
+RUN dart pub get --offline && dart analyze lib bin && \
+    dart compile exe bin/domain_worker.dart -o /out/domain_worker
+
+# ---------- 2. Рантайм: минимальный образ + curl для healthcheck ----------
+FROM debian:stable-slim
+
+# curl нужен healthcheck'у compose: curl -f http://localhost:8101/healthz
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Каталог данных (том domain-data: staging конвертера/выгрузки, если понадобятся).
+ENV PP_DATA_DIR=/srv/domain/data
+RUN mkdir -p /srv/domain/data
+
+COPY --from=build /out/domain_worker /usr/local/bin/domain_worker
+
+# Внутренний порт compose-сети (наружу не публикуется, ADR-6).
+ENV PP_DOMAIN_PORT=8101 \
+    PP_DOMAIN_HOST=0.0.0.0 \
+    PP_DOMAIN_MAX_BODY_MB=96 \
+    PP_DOMAIN_TIMEOUT=180
+
+EXPOSE 8101
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=5s --retries=5 \
+    CMD curl -fsS http://127.0.0.1:8101/healthz || exit 1
+
+ENTRYPOINT ["/usr/local/bin/domain_worker"]

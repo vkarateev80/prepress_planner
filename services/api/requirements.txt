@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+python-multipart
+pydantic
+# S3-подпись (SigV4) и все внутренние HTTP-вызовы сделаны стандартной
+# библиотекой (urllib/hashlib/hmac) — boto3 не требуется.
+# psycopg2 нужен только при DB_URL=postgresql:// (иначе SQLite).
+psycopg2-binary; python_version >= "3.8"
+pytest
+httpx

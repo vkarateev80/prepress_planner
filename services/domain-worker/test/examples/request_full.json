@@ -1,0 +1,21 @@
+{
+  "stages": [
+    "all"
+  ],
+  "name": "quadroring (полный путь)",
+  "fileName": "quadroring.svg",
+  "file_base64": "PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPCFET0NUWVBFIHN2ZyBQVUJMSUMgIi0vL1czQy8vRFREIFNWRyAxLjEvL0VOIiAiaHR0cDovL3d3dy53My5vcmcvR3JhcGhpY3MvU1ZHLzEuMS9EVEQvc3ZnMTEuZHRkIj4KPCEtLSBDcmVhdG9yOiBDb3JlbERSQVcgMjAyMCAoNjQtQml0KSAtLT4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbDpzcGFjZT0icHJlc2VydmUiIHdpZHRoPSIyMTBtbSIgaGVpZ2h0PSIyOTdtbSIgdmVyc2lvbj0iMS4xIiBzdHlsZT0ic2hhcGUtcmVuZGVyaW5nOmdlb21ldHJpY1ByZWNpc2lvbjsgdGV4dC1yZW5kZXJpbmc6Z2VvbWV0cmljUHJlY2lzaW9uOyBpbWFnZS1yZW5kZXJpbmc6b3B0aW1pemVRdWFsaXR5OyBmaWxsLXJ1bGU6ZXZlbm9kZDsgY2xpcC1ydWxlOmV2ZW5vZGQiCnZpZXdCb3g9IjAgMCAyMTAwMCAyOTcwMCIKIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIgogeG1sbnM6eG9kbT0iaHR0cDovL3d3dy5jb3JlbC5jb20vY29yZWxkcmF3L29kbS8yMDAzIj4KIDxkZWZzPgogIDxzdHlsZSB0eXBlPSJ0ZXh0L2NzcyI+CiAgIDwhW0NEQVRBWwogICAgLnN0cjAge3N0cm9rZTojMkIyQTI5O3N0cm9rZS13aWR0aDoyMDtzdHJva2UtbWl0ZXJsaW1pdDoyMi45MjU2fQogICAgLmZpbDAge2ZpbGw6bm9uZX0KICAgXV0+CiAgPC9zdHlsZT4KIDwvZGVmcz4KIDxnIGlkPSLQodC70L7QuV94MDAyMF8xIj4KICA8bWV0YWRhdGEgaWQ9IkNvcmVsQ29ycElEXzBDb3JlbC1MYXllciIvPgogIDxyZWN0IGNsYXNzPSJmaWwwIHN0cjAiIHg9Ijg0MzUuMjIiIHk9Ijc4NzUuMjIiIHdpZHRoPSIyMTUyLjgxIiBoZWlnaHQ9IjMyOTUuMTIiLz4KICA8ZWxsaXBzZSBjbGFzcz0iZmlsMCBzdHIwIiBjeD0iOTU4MS4yMyIgY3k9IjEzNDMzLjYzIiByeD0iMjExOS44NSIgcnk9IjIxODUuNzYiLz4KICA8ZWxsaXBzZSBjbGFzcz0iZmlsMCBzdHIwIiBjeD0iOTU4MS4yMyIgY3k9IjEzNDMzLjYzIiByeD0iMjExOS44NSIgcnk9IjIxODUuNzYiLz4KIDwvZz4KPC9zdmc+Cg==",
+  "includeRawPaths": false,
+  "includeErrors": false,
+  "variantsLimit": 20,
+  "teoInput": {
+    "materialId": "paper-sa-80",
+    "machineId": "flexo-300",
+    "toolingCost": 0,
+    "markupPct": 0,
+    "setupMaterialMeters": 0,
+    "shiftCostPerShift": 0,
+    "hoursPerShift": 8,
+    "shiftsPerDay": 1
+  }
+}

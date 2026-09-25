@@ -5,6 +5,7 @@
 /// проектов получаем сканированием ключей префикса.
 library;
 
+// ignore: deprecated_member_use -- dart:html остаётся: pub.dev недоступен, package:web не установить
 import 'dart:html' as html;
 
 const _kNamespace = 'pp_prepress_planner';

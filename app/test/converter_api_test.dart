@@ -6,6 +6,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:prepress_planner/src/converter/converter_api.dart';
+import 'package:prepress_planner/src/converter/converter_server.dart';
 
 /// Локальный фейковый сервис конвертации (контракт services/converter).
 class _FakeConverterServer {
@@ -107,6 +108,17 @@ void main() {
 
   tearDownAll(() async {
     await dir.delete(recursive: true);
+  });
+
+  test('устаревший IP 193.233.193.12 удалён из дефолтов (ADR-6)', () {
+    // ADR-6: зашитый IP старого VPS удалён из клиентской логики.
+    // На VM без env действует локальный сервер разработки (8120),
+    // на web дефолт пуст → относительные URL того же origin (`/convert`).
+    expect(ConverterApi.defaultBaseUrl(), isNot(contains('193.233.193.12')));
+    expect(ConverterServer.defaultBaseUrl(), isNot(contains('193.233.193.12')));
+    final api = ConverterApi(baseUrl: '');
+    expect(api.baseUrl, isEmpty);
+    expect(ConverterServer.isLocal(''), isFalse);
   });
 
   test('неподдерживаемый формат отклоняется без обращения к серверу', () async {

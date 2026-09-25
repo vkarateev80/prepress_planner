@@ -1,23 +1,144 @@
-# Полный стек «Препресс-Планер» для нового сервера: converter (8120),
-# auth (8121), payments (8122) и web-версия через nginx (8081, единый origin).
+# SaaS-инфраструктура «Препресс-Планер» (prepress-saas) — production-стек.
+# Основан на System Design (ADR-5, ADR-6): гибридное хранилище (S3+PG),
+# Docker Compose + nginx TLS, единый origin на 443, внутренние сервисы
+# (converter/auth/payments/domain-worker/billing) не публикуют порты наружу.
 #
-# Запуск с этого каталога (deploy/):
-#   cp .env.example .env        # при необходимости задайте PP_AUTH_SECRET
+# Запуск:
+#   cp .env.example .env   # задайте PP_AUTH_SECRET и ключи ЮKassa
 #   docker compose up -d --build
 #
-# Структура:
-#   ../services/converter auth payments — исходники сервисов (build-контексты);
-#   ./web                           — статика flutter build web (см. build_bundle);
-#   ./nginx/pp-web.conf             — конфиг nginx (прокси на имена сервисов).
+# Компоненты:
+#   postgresql — единая БД метаданных, состояний, подписок (5432 внутр.)
+#   minio      — S3-совместимое объектное хранилище (9000 внутр., 9001 консоль)
+#   domain-worker — канонический Dart-VM исполнитель packages/core (8101 внутр.)
+#   api        — контрольный слой (проекты/файлы/расчёты) на FastAPI (8100 внутр.)
+#   auth / billing — эволюция services/auth и services/payments (8121/8122 внутр.)
+#   converter  — AI/CDR/EPS → SVG/PDF (8120 внутр., N воркеров, общий volume)
+#   billing    — ЮKassa (checkout/webhook/entitlement, триал 15 дн вне провайдера)
+#   web (nginx) — TLS-терминация, единый origin 443, статика Flutter Web
 #
-# ВАЖНО: nginx стоит в той же сети compose и ходит к сервисам по именам
-# (converter/auth/payments) — никакого CORS, единый origin http://<host>:8081.
+# Ограничения среды: без pub.dev; stdlib Dart для domain-worker;
+#    порты 8100/8101/8120/8121/8122 — только внутри сети compose.
+
 services:
+  # === Хранилище метаданных (ADR-5) ===
+  postgresql:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: prepress_saas
+      POSTGRES_USER: pp_user
+      POSTGRES_PASSWORD: ${PP_DB_PASSWORD:-pp_secret}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pp_user -d prepress_saas"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - pp-net
+
+  # === Объектное хранилище (ADR-5) — S3-совместимое (MinIO для dev/prod-ready) ===
+  minio:
+    image: minio/minio:latest
+    environment:
+      # Для прода задайте свои ключи в .env (PP_OBJECT_STORAGE_*); дефолты —
+      # только для dev. Bucket создаёт api при старте (публичный доступ закрыт).
+      MINIO_ROOT_USER: ${PP_OBJECT_STORAGE_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${PP_OBJECT_STORAGE_SECRET_KEY:-minioadmin}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+    ports:
+      # Консоль — только для администрирования; публичный доступ к объектам — через API/nginx (presigned URLs)
+      - "127.0.0.1:9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - pp-net
+
+  # === Домен — серверный Dart-воркер (ADR-2) ===
+  # Чистый Dart VM + stdlib; подключает packages/core по path.
+  # Исполняет parse/analyze/heal/pattern/calc/variants/teo/reports.
+  domain-worker:
+    build:
+      context: ../
+      dockerfile: Dockerfile.domain-worker  # отдельный Dockerfile для чистого Dart VM
+    image: pp-domain-worker:latest
+    environment:
+      PP_CORE_PATH: /workspace/packages/core
+      PP_DATA_DIR: /srv/domain/data
+    volumes:
+      - ../packages/core:/workspace/packages/core:ro
+      - domain-data:/srv/domain/data
+    depends_on:
+      - postgresql
+    networks:
+      - pp-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8101/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # === Контрольный API (FastAPI, новый) ===
+  api:
+    build: ../services/api  # проекты/файлы: гибрид S3+PostgreSQL (ADR-5), N-4
+    image: pp-api:latest
+    environment:
+      DB_URL: postgresql://pp_user:${PP_DB_PASSWORD:-pp_secret}@postgresql:5432/prepress_saas
+      PP_DATA_DIR: /srv/api/data
+      AUTH_URL: http://auth:8121
+      PP_AUTH_URL: http://auth:8121          # авторизация: auth POST /auth/verify
+      BILLING_URL: http://billing:8122
+      PP_BILLING_URL: http://billing:8122    # entitlement-гейтинг (§12.3)
+      CONVERTER_URL: http://converter:8120   # ADR-7: конвертер только сервер-к-серверу
+      DOMAIN_WORKER_URL: http://domain-worker:8101
+      OBJECT_STORAGE_ENDPOINT: http://minio:9000
+      # Внешний endpoint для presigned URL: публикуется edge-nginx по пути
+      # /s3/ (location ^~ /s3/ → minio:9000). Публичный bucket запрещён —
+      # ссылка живёт PP_PRESIGN_TTL секунд и подписана SigV4.
+      OBJECT_STORAGE_PUBLIC_ENDPOINT: ${PP_PUBLIC_BASE:-}
+      OBJECT_STORAGE_BUCKET: prepress-saas
+      OBJECT_STORAGE_ACCESS_KEY: ${PP_OBJECT_STORAGE_ACCESS_KEY:-minioadmin}
+      OBJECT_STORAGE_SECRET_KEY: ${PP_OBJECT_STORAGE_SECRET_KEY:-minioadmin}
+      OBJECT_STORAGE_PREFIX: org
+      PP_MAX_MB: "50"
+      PP_PRESIGN_TTL: "300"
+      PP_MAX_FILE_VERSIONS: "20"
+      PP_ENTITLEMENT_ENFORCE: "1"
+      PP_AUTH_REQUIRED: "1"
+    volumes:
+      - api-data:/srv/api/data
+    depends_on:
+      - postgresql
+      - minio
+      - auth
+      - billing
+      - converter
+      - domain-worker
+    networks:
+      - pp-net
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/healthz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    # 8100 — только внутренняя сеть (наружу — через nginx, ADR-6).
+
+  # === Конвертер (ADR-7) — отдельный сервис, внутренняя сеть ===
   converter:
     build: ../services/converter
     image: pp-converter:latest
-    ports:
-      - "8120:8120"
     environment:
       PP_DATA_DIR: /srv/converter/data
       PP_JOB_STORE: file
@@ -32,67 +153,106 @@ services:
       retries: 5
       start_period: 10s
     restart: unless-stopped
+    networks:
+      - pp-net
+    # Порт 8120 НЕ публикуется наружу (ADR-6); доступ только через api/domain-worker/nginx
 
+  # === Auth — эволюция services/auth (ADR-4) ===
   auth:
     build: ../services/auth
     image: pp-auth:latest
-    ports:
-      - "8121:8121"
     environment:
       PP_DATA_DIR: /srv/auth/data
       PP_AUTH_SECRET: ${PP_AUTH_SECRET:?задайте PP_AUTH_SECRET в .env}
       PP_TOKEN_TTL: "720"
       PP_RESET_TTL: "30"
-      # Почта для сброса пароля (необязательно; без неё код — dev-режим).
+      # SMTP — транзакционный провайдер (реальная почта). В dev — пустые значения -> dev-режим.
       PP_SMTP_HOST: ${PP_SMTP_HOST:-}
       PP_SMTP_PORT: ${PP_SMTP_PORT:-587}
       PP_SMTP_USER: ${PP_SMTP_USER:-}
       PP_SMTP_PASSWORD: ${PP_SMTP_PASSWORD:-}
       PP_SMTP_FROM: ${PP_SMTP_FROM:-}
+      DB_URL: postgresql://pp_user:${PP_DB_PASSWORD:-pp_secret}@postgresql:5432/prepress_saas
     volumes:
       - auth-data:/srv/auth/data
+    depends_on:
+      - postgresql
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8121/healthz', timeout=3)"]
       interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 5s
     restart: unless-stopped
+    networks:
+      - pp-net
+    # 8121 — только внутренняя сеть.
 
-  payments:
-    build: ../services/payments
-    image: pp-payments:latest
-    ports:
-      - "8122:8122"
+  # === Billing / Подписка (ADR-3) — ЮKassa ===
+  billing:
+    build: ../services/payments  # переименован для ясности; содержит ЮKassa-стек
+    image: pp-billing:latest
     environment:
-      PP_DATA_DIR: /srv/payments/data
-      PP_AUTH_URL: http://auth:8121   # внутренний адрес auth в этой сети
+      PP_DATA_DIR: /srv/billing/data
+      PP_AUTH_URL: http://auth:8121
+      DB_URL: postgresql://pp_user:${PP_DB_PASSWORD:-pp_secret}@postgresql:5432/prepress_saas
+      # ЮKassa-переменные (песочница / прод); секреты — через .env/секрет-менеджер
+      YUKASSA_SHOP_ID: ${YUKASSA_SHOP_ID:-test_shop}
+      YUKASSA_SECRET_KEY: ${YUKASSA_SECRET_KEY:-test_secret}
+      # Пусто → вебхук отклоняется (fail closed): задайте секрет подписи в проде.
+      YUKASSA_WEBHOOK_SECRET: ${YUKASSA_WEBHOOK_SECRET:-}
+      YUKASSA_API_URL: ${YUKASSA_API_URL:-https://api.yookassa.ru/v3}
+      # 1 — просить ЮKassa сохранить способ оплаты (автоплатежи; нужна активация).
+      YUKASSA_SAVE_PAYMENT_METHOD: ${YUKASSA_SAVE_PAYMENT_METHOD:-0}
+      PP_TRIAL_DAYS: "15"
+      PP_PRO_MONTH_PRICE_RUB: "990"
+      PP_PRO_YEAR_PRICE_RUB: "9900"
+      # return_url после оплаты — публичный origin (ADR-6, 443).
+      PP_PUBLIC_BASE: ${PP_PUBLIC_BASE:-}
+      PP_RETURN_PATH: ${PP_RETURN_PATH:-/billing/return}
     volumes:
-      - payments-data:/srv/payments/data
+      - billing-data:/srv/billing/data
+    depends_on:
+      - postgresql
+      - auth
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8122/healthz', timeout=3)"]
       interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 5s
     restart: unless-stopped
+    networks:
+      - pp-net
+    # 8122 — только внутренняя сеть.
 
+  # === Nginx (edge) — TLS-терминация, единый origin 443 (ADR-6) ===
   web:
     image: nginx:alpine
     ports:
-      - "8081:80"
+      # Публичный порт — только 443 (TLS); 80 перенаправляет на 443.
+      - "443:443"
+      - "80:80"
     volumes:
       - ./web:/usr/share/nginx/html:ro
-      - ./nginx/pp-web.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/pp-web-tls.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
     depends_on:
+      - api
       - converter
-      - auth
-      - payments
     restart: unless-stopped
+    networks:
+      - pp-net
 
 volumes:
+  pg-data:
+  minio-data:
   converter-data:
   auth-data:
-  payments-data:
+  billing-data:
+  domain-data:
+  api-data:
+
+networks:
+  pp-net:
+    driver: bridge

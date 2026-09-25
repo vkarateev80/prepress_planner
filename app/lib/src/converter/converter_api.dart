@@ -53,10 +53,15 @@ class ConverterApi implements Converter {
     this.timeout = const Duration(seconds: 180),
   }) : baseUrl = baseUrl ?? defaultBaseUrl();
 
-  /// Адрес по умолчанию: env PP_CONVERTER_URL (desktop), на web — тот же
-  /// origin (проксирование /converter на VPS).
+  /// Адрес по умолчанию: env `PP_CONVERTER_URL` (desktop/VM), на web — тот же
+  /// origin (ADR-1/ADR-6).
+  ///
+  /// Зашитый IP удалён (ADR-6): в браузере env нет (`env_web.dart` возвращает
+  /// пусто), поэтому «пусто» означает **относительные URL того же origin** —
+  /// `/convert`, `/data/out/...` проксирует edge nginx. Пустая строка вместо
+  /// IP исключает обращения к чужому/устаревшему серверу.
   static String defaultBaseUrl() =>
-      envOrDefault('PP_CONVERTER_URL', 'http://193.233.193.12:8120');
+      envOrDefault('PP_CONVERTER_URL', '').trim();
 
   static const _closedExts = {'.ai', '.cdr', '.eps'};
 

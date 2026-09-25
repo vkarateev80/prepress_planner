@@ -1,0 +1,7 @@
+# domain-worker: артефакты Dart и локальные данные прогонов.
+.dart_tool/
+.packages
+pubspec.lock
+build/
+data/
+*.log

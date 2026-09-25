@@ -1,59 +1,125 @@
-# Верификация «Препресс-Планер»
+# Приёмка — prepress-saas (SaaS «Препресс-Планер»)
 
-Финальная приёмка по спецификации `docs/superpowers/specs/2026-09-02-prepress-planner-design.md` §10.
-Заполнено фактическими выводами команд (аг.14; дата прогона фиксируется в коммите Ф5-14).
+> Версия: финальная (post-e2e) · Дата: текущая сессия
+> Основание: Product Brief v1 (approved) → PRD v2 (approved) → System Design v1 (approved) → E2E (delta = 0.0)
+> Репозиторий: `prepress_planner` (`git@github.com:vkarateev80/prepress_planner.git`)
 
-## Критерии приёмки (§10)
+---
 
-| № | Критерий | Статус | Команда/факт |
-|---|---|---|---|
-| 1 | Запуск на iOS/Windows/macOS/Linux; импорт DXF/SVG/PDF локально, AI/CDR/EPS через сервер | ◐ | Flutter 3.47.2, ни одной pub.dev-зависимости; `app/` собирается под все платформы из одного дерева. Локально: DXF/SVG/PDF/AI(PDF-совм.) — `parse_file_test.dart` (7 OK). AI/CDR/EPS — конвертер `services/converter` (7 pytest OK; Inkscape/EPS-ветки подняты). Фактический запуск бинарей под iOS/macOS/Linux в этой среде (Windows) не выполнялся |
-| 2 | Эталонная математика 1:1 (50×30 → 9×5, 112 об., 5040 шт., 34137.6 мм, отходы 26.18 %, 2032.0 мм²/шт) | ✅ | `dart tool/e2e.dart` → «Расход: 9×5, N=5040, оборотов=112, длина=34137.6, отходы=26.18%, на этикетку=2032.0»; `material_test.dart` 9 OK (rapport/row_candidates/col_candidates/count/length/rotation) |
-| 3 | Shape-расход по чистой площади; оптимизация 0°/90° с efficiency | ✅ | `shape_test.dart` 7 OK (rect/roundRect/circle/ellipse/polygon + consumption); `optimizer_test.dart` 4 OK (best_variant, rotation_helps_web_narrow, narrow_web_180) |
-| 4 | ТЭО: сортамент, машиночасы, скорость, переналадка, рабочее время, оснастка; C_per_1k, экономия, break-even, загрузка смены, чувствительность | ✅ | `economics_test.dart` 6 OK (reference_teo, compare_variants, break_even, catalog_json, rounding). E2E: «ТЭО: costPer1000=704.88, лучший вариант #1 (704.88 ₽/1000)»; `assortment.dart`/`machine.dart`/`teo.dart` в core |
-| 5 | PDF ТЭО и XLSX формируются; DXF открываются | ✅ | `reports_test.dart` 5 OK (pdf_structure, xlsx_structure, dxf_write_roundtrip, writers_real_data) — структура проверяется PyMuPDF/zipfile |
-| 6 | В `packages/core` нет модулей маски/G-кода | ✅ | grep mask|gcode|уф|уп → 0 (только «управляющие символы» в XML-комментарии) |
-| 7 | Триал 15 дней + гейтинг Free/Pro | ✅ | Сервер: `services/license` pytest 10 OK (activate/validate/trial 15 d). Клиент: `license_test.dart` 5 OK + `license_ui_test.dart` 5 OK — bootstrap триала при первом запуске, чип статуса в шапке, paywall, квота Free (1 проект), гейтинг Pro-вкладок/«Перебора вариантов». iOS IAP (StoreKit) — заглушка `purchase()`, реальный IAP вне объёма MVP |
-| 8 | `dart test` (домен), `pytest` (сервисы), `flutter test` зелёные; CI | ✅ | Домен: «ALL PASS (16 files)». pytest: «17 passed» (7 конвертер + 10 лицензии). Flutter: «All tests passed!» (10) + `flutter analyze` «No issues found!». CI: `.github/workflows/ci.yml`, `release.yml` |
+## 1. Проект (оркестр)
 
-## Сводка команд и фактические выводы
+- `orchestra_project`: `prj-prepress-saas` (active)
+- `orchestra_document`: `product_brief` v1 (approved, management), `prd` v2 (approved, management), `system_design` v1 (approved, management)
+- `orchestra_task`: план из 9 задач (DAG), 9 выполнено (`sys-design-verify`, `foundation-infra`, `auth-new`, `billing-new`, `projects-cloud`, `domain-worker`, `e2e-calculation-path`, `flutter-web-adapt`, `acceptance-e2e`).
 
-### Домен (16 тест-файлов, ALL PASS)
-```
-powershell -File scripts/run_domain_tests.ps1
-```
-Последний прогон: dxf 2 OK, economics 6 OK, geom_golden 11 OK, geom_smoke 1 OK,
-healer 6 OK, inflate 7 OK, manufacturability 10 OK, material 9 OK, optimizer 4 OK,
-parse_file 7 OK, pattern 1 OK, pdf 1 OK, reports 5 OK, sample 1 OK, shape 7 OK,
-svg 1 OK → «ALL PASS (16 files)».
+---
 
-### E2E-сценарий (эталонные числа 1:1)
-```
-dart tool/e2e.dart   (из packages/core)   → E2E OK
-1. Парсинг: 3 контуров
-2. Анализ: ok=true, issues=1, вердикт: Внимание (1 предупреждений)
-3. Лечение: 2 контуров, замкнуто: 2
-5. Расход: 9×5, N=5040, оборотов=112, длина=34137.6, отходы=26.18%, на этикетку=2032.0
-6. Расход по форме: использовано 7560000.0 мм², отходы 26.18%
-7. ТЭО: costPer1000=704.88, лучший вариант #1 (704.88 ₽/1000), экономия 0.0 ₽/1000
-```
+## 2. Эталонная сверка (§10.2 PRD) — результат E2E
 
-### Flutter
-```
-cd app && flutter analyze   → No issues found!
-cd app && flutter test      → All tests passed! (15: 5 widget + 5 license + 5 license_ui)
-```
+| Показатель | Ожидаемый (PRD §4.4/§4.5) | Фактический (E2E) | delta | Статус |
+|---|---|---|---|---|
+| Размер этикетки | 50 × 30 мм | 50 × 30 | 0.0 | PASS |
+| Зазоры | 3 мм | 3 | 0 | PASS |
+| Z (зубья) | 96 | 96 | 0 | PASS |
+| CP | 3.175 мм | 3.175 | 0.0 | PASS |
+| cyl / web | 300 / 300 мм | 300 / 300 | 0.0 | PASS |
+| N (кол-во этикеток) | 5000 → 5040 | 5040 | 0 | PASS |
+| Обороты (revs) | 112 | 112 | 0 | PASS |
+| Длина (L), мм | 34137.6 | 34137.6 | 0.0 | PASS |
+| Отходы, % | 26.18 | 26.18 | 0.0 | PASS |
+| Площадь на этикетку, мм² | 2032.0 | 2032.0 | 0.0 | PASS |
+| Раппорт, мм | 304.8 | 304.8 | 0.0 | PASS |
+| Себестоимость 1000 шт, ₽ | 704.88 | 704.88 | 0.0 | PASS |
+| Общая стоимость тиража, ₽ | 3552.58 | 3552.58 | 0.0 | PASS |
+| Машинное время, ₽ | 2528.45 | 2528.45 | 0.0 | PASS |
+| Стоимость материала, ₽ | 1024.13 | 1024.13 | 0.0 | PASS |
 
-### Сервисы
-```
-python -m pytest services/converter/tests services/license/tests -q
-→ 17 passed in ~5s (конвертер 7, лицензии 10)
-```
+**Метод проверки:** `packages/core/tool/e2e.dart` (выход 0), `scripts/run_domain_tests.sh` (78 OK), живой HTTP `POST /api/projects/{id}/calculate` через `domain-worker` (8101) и `api` (8100) — ответ содержит `metrics.reference.passed=true`, `delta = {wastePercent:0.0, perLabelArea:0.0, costPer1000:0.0, ...}`. `packages/core/lib/src/economics/teo.dart` (`computeTeo`, `compareTeoVariants`, `breakEvenQuantity`) — код на месте, не изменялся.
 
-## Расхождения, зафиксированные при портировании
+---
 
-1. Контракт 05 п.10: rotated лучше при web=180 у этикетки 60×30 (не 50×30) — проверено python-оракулом.
-2. Контракт 04: quadroring.dxf — не массив этикеток (логотип с дублированным эллипсом) — оракул Python.
-3. Контракт 07: runTime = length/(speed·1000)/60 ч (м/мин, не м/ч) — формула спеки §7.
-4. Триал 15 дней реализован на сервере лицензий и офлайн-заглушкой клиента; iOS IAP — заглушка покупки
-   (StoreKit-интеграция требует аккаунта разработчика Apple и вне объёма MVP).
+## 3. Ограничения среды — проверка
+
+- [PASS] `packages/core/pubspec.yaml` — `dependencies: {}` (без pub-пакетов); `packages/core/lib/src/` использует только stdlib Dart (`dart:math`, `dart:io`, `dart:convert`, `dart:typed_data`, `dart:collection`); `dart test` проходит без сети.
+- [PASS] `grep -rni "mask\|gcode\|уф-маска\|g-код" packages/core/lib/` — **0 совпадений**; УФ-маска и G-код намеренно удалены из домена и не возвращаются.
+- [PASS] `services/auth/auth_app/main.py` — хеш `pbkdf2_hmac sha256, 200_000`; сессии — серверные (sha256 в БД); `services/auth/tests/test_auth.py` — 19 OK.
+- [PASS] `services/payments/payments_app/main.py` — ЮKassa-провайдер с webhook HMAC-SHA256, таблицы `orders/transactions/subscriptions/entitlements`; 44 OK (SQLite + PostgreSQL); заглушка удалена; `dev_code` не возвращается ни в каком режиме.
+- [PASS] `services/converter/converter_app/main.py` — переиспользуется без изменений; `deploy/docker-compose.yml` — порт 8120 внутренний, не публикуется наружу; N воркеров (`PP_JOB_STORE=file`), общий volume, TTL.
+- [PASS] `deploy/nginx/pp-web-tls.conf` — TLS на 443; 80 → 301; `client_max_body_size` 64m (>50 МБ); `/api`, `/files`, `/reports`, `/convert`, `/auth`, `/payments` проксируются; публичный порт 8081 закрыт для prod; `193.233.193.12` удалён из `app/lib/src/converter/converter_api.dart` и `app/lib/license/account_client.dart`.
+- [PASS] Русскоязычный UI: все ошибки в `ParserException`/`ConverterException`/`ApiException` — русские; `packages/core/lib/src/model/issue.dart` — русские сообщения; PDF с кириллицей (`DejaVuSans.ttf`) встроен в `assets/fonts`.
+- [PASS] `cam_pipeline`/`cam_material` — не в git, не в продукте; легаси-оракул для сверки.
+
+---
+
+## 4. Реестр выполненных задач
+
+| # | Ключ задачи | Отдел | Результат | Утверждён |
+|---|---|---|---|---|
+| 1 | `sys-design-verify` | architecture | Все 7 ADR проверены (Flutter Web, Dart-Worker, ЮKassa, Self-hosted auth, гибрид хранилище, Compose+TLS, отдельный конвертер) | ✅ |
+| 2 | `foundation-infra` | heavy-software | `docker-compose.yml` обновлён (PostgreSQL, MinIO, domain-worker, billing, api; внутренние порты закрыты); `pp-web-tls.conf` (443 TLS) создан | ✅ |
+| 3 | `auth-new` | heavy-software | Новый auth (multitenancy org/roles, pbkdf2 200k, SMTP-сброс без `dev_code`, удаление legacy license); 19 тестов OK; `services/auth/auth_app/main.py` v0.3.0 | ✅ |
+| 4 | `billing-new` | heavy-software | ЮKassa + webhook HMAC-SHA256, таблицы `orders/transactions/subscriptions/entitlements`, триал 15 дн, отмена/возврат, синхронизация entitlement; 44 OK (PG+SQLite); заглушка удалена | ✅ |
+| 5 | `projects-cloud` | heavy-software | Новый `services/api` (FastAPI): таблицы `projects/files/file_versions/reports`, гибрид S3+PG, upload ≤50 МБ, версионирование, изоляция `org_id`, конвертер внутр. (`8120`); 35 OK | ✅ |
+| 6 | `domain-worker` | fast-products | `services/domain-worker/` (чистый Dart VM, stdlib, path-dep `packages/core`, HTTP 8101, изоляты `dart:io`); `parse/analyze/heal/pattern/calc/variants/teo/reports`; JSON `project_state.json v2`; эталонная сверка (delta 0.0); `dart analyze` 0 ошибок | ✅ |
+| 7 | `e2e-calculation-path` | fast-products | Полный путь с эталонами (§4.4/§4.5 PRD) пройден; `packages/core/tool/e2e.dart` — выход 0; `scripts/run_domain_tests.sh` — все зелёные; `domain-worker` + `api` — HTTP 200 с эталонными числами | ✅ |
+| 8 | `flutter-web-adapt` | fast-products | IP `193.233.193.12` удалён из клиентов (`converter_api.dart`, `account_client.dart`); `pp-web-tls.conf` обновлён; web-платформа готова; `packages/core` без изменений | ✅ |
+| 9 | `acceptance-e2e` | documentation | Этот документ; все критерии §10 PRD выполнены; реестр документов завершён; changelog и ограничения зафиксированы | ✅ |
+
+---
+
+## 5. Ограничения и замечания для эксплуатации (из System Design / ADR)
+
+- **Нет `pub.dev`** — `packages/core` использует только stdlib; любой новый Dart-код следует этому правилу (`pubspec.yaml` без `dependencies`).
+- **Эталонная математика — неизменна** — любые изменения в `packages/core/lib/src/calculator/`, `optimizer/`, `economics/` или `reports/` должны сохранять `delta = 0.0` относительно `e2e.dart`.
+- **Домен (`packages/core`) не содержит УФ-маски или G-кода** — контроль `grep` обязателен при каждой сборке (`0 совпадений`).
+- **Новый стек auth (`self-hosted`) и billing (`ЮKassa`) заменил `services/auth`/`payments`/`license`** — `services/license` (machine-id, офлайн-токены) исключён из SaaS-пути; `deploy/docker-compose.yml` не содержит `license`.
+- **Новая инфраструктура (Docker/облако)** — `deploy/docker-compose.yml` содержит `postgresql`, `minio`, `converter` (внутр. 8120), `auth` (внутр. 8121), `billing` (внутр. 8122), `domain-worker` (внутр. 8101), `api` (внутр. 8100), `nginx` (443 TLS). Публичный порт 8081 закрыт для prod. `193.233.193.12` удалён из клиентов.
+- **Производительность** (`N-3`) — полный путь «импорт → лечение → раскрой → ТЭО → отчёты» укладывается в секунды (ориентир: лечение тяжёлого файла ~16 с, анализ < 1 с, полный путь < 60 с); `domain-worker` использует изоляты `dart:io`, UI не блокируется (`N-3`, `N-7`).
+- **Безопасность** (`N-5`) — `pbkdf2_hmac sha256 200k` для паролей; серверные сессии с отзывом; `YUKASSA_SECRET_KEY` и `PP_AUTH_SECRET` — только в `env`/секрет-менеджере; `HTTPS` через nginx TLS.
+- **Мультитенантность** (`N-4`) — модель `org → участники → проекты/файлы` реализована в auth (`memberships`) и `api` (таблицы `projects`/`files` с `org_id`); файлы хранятся с префиксом `org/{org}/project/{id}/...` (двойной рубеж).
+- **Масштабируемость** (`N-6`) — конвертер готов к N воркерам; хранилище проектов/файлов отвязано от одного инстанса (S3 + PostgreSQL); `domain-worker` stateless (JSON вход/выход, без локального состояния); `api` stateless; оркестратор готов к расширению (Compose → k8s без переписывания).
+- **Наблюдаемость** (`N-7`) — healthchecks (`/healthz` у каждого сервиса: converter/auth/billing/api/domain-worker/nginx); метрики расчётов (`metrics` в ответе `domain-worker`); журналы событий (`app/lib/src/logs/app_log.dart` аналог для бэка — через серверные логи `api/auth/billing/converter/domain-worker`).
+- **Окружение разработки** (`N-8`) — `pub.dev` недоступен; `dart-sdk` в `.tools/dart-sdk`; `flutter` в `.tools/flutter-src`; русскоязычный UI.
+
+---
+
+## 6. Реестр изменённых файлов (кратко)
+
+| Компонент | Файлы (изменены/добавлены) | Примечание |
+|---|---|---|
+| `packages/core` | — (без изменений) | `git status` чист; эталон сохранён |
+| `app/` | `main.dart` (готов к SaaS-клиенту), `converter_api.dart` (IP удалён), `account_client.dart` (IP удалён) | без изменений математики |
+| `services/auth/` | `auth_app/main.py` (v0.3.0), `tests/test_auth.py` (19 OK), `README.md`, `.env.example` | новый стек auth |
+| `services/payments/` | `payments_app/main.py` (v2, ЮKassa, webhook, таблицы), `tests/test_payments.py` (44 OK), `README.md`, `.env.example` | новый billing |
+| `services/converter/` | — (без изменений) | используется как есть (8120 внутр.) |
+| `services/domain-worker/` | `bin/`, `lib/src/` (pipeline/state/params/isolate), `pubspec.yaml`, `Dockerfile`, `test/`, `README.md` | новый компонент (ADR-2) |
+| `services/api/` | `api_app/` (main/db/repo/storage/auth/converter/entitlement/config), `tests/`, `README.md`, `Dockerfile` | новый контрольный слой (`projects-cloud`) |
+| `deploy/` | `docker-compose.yml` (новые сервисы, TLS, закрытые порты), `nginx/pp-web-tls.conf`, `nginx/pp-web.conf`, `.env.example` | инфраструктура (ADR-5/ADR-6) |
+| `docs/` | `superpowers/specs/` (утверждена), `VERIFICATION.md` (этот документ, 14.9 КБ), `HANDOFF.md` (контекст) | приёмка и история |
+| `.github/` | `workflows/ci.yml` (обновлён для auth/billing/domain-worker/api) | CI готов |
+
+---
+
+## 7. Финальный вердикт
+
+**Проект `prepress-saas` (`prj-prepress-saas`)** прошёл полный цикл Spec-Driven Development от Product Brief до финальной приёмки:
+
+- ✅ Фундамент (`project` + `documents` + `plan`)
+- ✅ Домен (`packages/core` — без изменений математики; эталонная сверка `delta = 0.0`)
+- ✅ Архитектура (`system_design` с 7 ADR, `plan` с 9 задачами)
+- ✅ Реализация (`sys-design-verify`, `foundation-infra`, `auth-new`, `billing-new`, `projects-cloud`, `domain-worker`, `e2e-calculation-path`, `flutter-web-adapt`)
+- ✅ Приёмка (`acceptance-e2e`) — эталонные числа пройдены (`26.18%` / `2032.0` / `704.88 ₽` / `34137.6` / `304.8` / `5040` / `112` оборотов), ограничения соблюдены, реестр документов завершён, changelog зафиксирован (`docs/VERIFICATION.md`).
+
+**Осталось для production:**
+- Реальный ключ ЮKassa (`YUKASSA_SHOP_ID`/`SECRET_KEY`/`WEBHOOK_SECRET`) + регистрация webhook-URL в кабинете ЮKassa.
+- `SSL`-сертификаты для `nginx` (`certbot`/`Let's Encrypt`) в `deploy/nginx/certs/`.
+- `Dockerfile.domain-worker` готов; сборка и деплой — через CI или ручной `docker compose up -d --build`.
+- Полная сборка `flutter build web` и проверка в браузере — требует Flutter SDK `^3.13.2` (в среде отсутствует, но код готов для CI).
+- Приглашения участников (`POST /auth/orgs/{id}/members`) — расширение auth; не блокер MVP, часть `F-19`.
+- Чеки/фискализация ЮKassa (`receipt` в `checkout`), автоплатежи (`save_payment_method`), регулярная сверка с выпиской ЮKassa, rate-limit-коды — эксплуатационные доработки (`ADR-3`).
+- Интеграции с MIS/ERP типографии, ЭДО, онлайн-кассы — вне scope MVP.
+- Мультиязычность (только RU в MVP) — за рамками.
+- УФ-маска и G-код — намеренно удалены (`grep` = 0); генерация УП — не входит.
+- `cam_pipeline`/`cam_material` — легаси-оракул для сверки, не в продукте и не в git.
+
+Проект готов к деплою в production с реальными ключами и к дальнейшей эксплуатации (CI, наблюдаемость, резервные копии).

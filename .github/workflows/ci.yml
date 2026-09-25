@@ -17,6 +17,18 @@ jobs:
       - name: Тесты домена
         run: bash scripts/run_domain_tests.sh
 
+  domain-worker:
+    name: Домен-воркер (Dart VM, ADR-2)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+      # Единственная зависимость — path: packages/core (офлайн, без pub.dev).
+      - name: Тесты и эталонные числа domain-worker
+        run: bash scripts/run_domain_worker_tests.sh
+
   flutter:
     name: Flutter (app)
     runs-on: ubuntu-latest
@@ -48,7 +60,17 @@ jobs:
         run: pip install fastapi uvicorn python-multipart pytest httpx
       - name: Пакеты license-сервера
         run: pip install sqlalchemy cryptography
+      - name: Пакеты auth-сервиса
+        run: pip install "pydantic[email]"
+      - name: Пакеты API проектов/файлов (ADR-5)
+        run: pip install -r services/api/requirements.txt
       - name: Тесты конвертера
         run: python -m pytest services/converter/tests -q
+      - name: Тесты auth
+        run: python -m pytest services/auth/tests -q
       - name: Тесты license
         run: python -m pytest services/license/tests -q
+      - name: Тесты billing (ЮKassa, ADR-3)
+        run: python -m pytest services/payments/tests -q
+      - name: Тесты API проектов и файлов (S3+PostgreSQL, изоляция по org, N-4)
+        run: python -m pytest services/api/tests -q

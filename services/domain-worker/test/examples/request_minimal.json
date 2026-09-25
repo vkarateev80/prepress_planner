@@ -1,0 +1,25 @@
+{
+  "stages": [
+    "calc",
+    "teo"
+  ],
+  "name": "Тираж 5000, 50×30",
+  "params": {
+    "labelW": 50,
+    "labelH": 30,
+    "gapX": 3,
+    "gapY": 3,
+    "zTeeth": 96,
+    "cp": 3.175,
+    "cylWidth": 300,
+    "webWidth": 300,
+    "mode": "count",
+    "count": 5000
+  },
+  "teoInput": {
+    "materialId": "paper-sa-80",
+    "machineId": "flexo-300"
+  },
+  "includeRawPaths": false,
+  "includeErrors": true
+}

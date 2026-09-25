@@ -1,0 +1,17 @@
+{
+  "status": "ok",
+  "service": "domain-worker",
+  "version": "0.1.0",
+  "schemaVersion": 2,
+  "core": "packages/core (path-зависимость, чистый Dart)",
+  "isolates": true,
+  "availableStages": [
+    "parse",
+    "analyze",
+    "heal",
+    "pattern",
+    "calc",
+    "variants",
+    "teo"
+  ]
+}

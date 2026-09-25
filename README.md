@@ -5,8 +5,10 @@
 - **Домен** (чистый Dart, без Flutter): `packages/core` — геометрия, парсеры (DXF/SVG/PDF/AI), лечение, массивы, shape-aware расход, технологичность, экономика/ТЭО, отчёты (PDF/XLSX/DXF).
 - **Приложение** (Flutter UI): `app` — проекты, геометрия, раскрой, ТЭО, отчёты.
 - **Сервисы** (FastAPI): `services/converter` (AI/CDR/EPS → SVG/PDF),
-  `services/auth` (аккаунты email+пароль, HMAC-токены),
-  `services/payments` (подписка Pro: заказ/оплата-заглушка/вебхук).
+  `services/auth` (аккаунты email+пароль, организации/роли, серверные сессии),
+  `services/payments` (подписка Pro: ЮKassa checkout/webhook/entitlement),
+  `services/api` (проекты и файлы: гибрид S3 + PostgreSQL, изоляция по
+  организации, вызов конвертера сервер-к-серверу — `services/api/README.md`).
 - **Легаси-эталон** (не в git): `cam_pipeline`, `cam_material` — исходный Python-код, из которого портируется домен.
 - **Контракты субагентов**: `agents/00..14`.
 - **Спека/план**: `docs/superpowers/specs/`, `docs/superpowers/plans/`.
@@ -42,7 +44,11 @@ Python venv: `cam_pipeline\venv\Scripts\python.exe` (fastapi/uvicorn/pytest/sqla
 & 'cam_pipeline\venv\Scripts\python.exe' -m pytest services/converter/tests -q
 & 'cam_pipeline\venv\Scripts\python.exe' -m pytest services/auth/tests -q
 & 'cam_pipeline\venv\Scripts\python.exe' -m pytest services/payments/tests -q
+& 'cam_pipeline\venv\Scripts\python.exe' -m pytest services/api/tests -q
 ```
+
+Стек SaaS (PostgreSQL + MinIO + nginx TLS 443): `deploy/docker-compose.yml`,
+описание — `deploy/README.md`, хранилище проектов/файлов — `services/api/README.md`.
 
 Python (для генерации золотых эталонов и верификации PDF): `cam_pipeline\venv\Scripts\python.exe` (содержит shapely, ezdxf, PyMuPDF).
 
@@ -55,6 +61,10 @@ Python (для генерации золотых эталонов и вериф�
 - Фаза 4 (сервисы: конвертер, авторизация, оплата) — выполнена; converter/auth/payments
   развёрнуты на VPS (8120/8121/8122), pytest зелёные; оплата — заглушка до подключения провайдера.
 - Фаза 5 (CI, сборка, верификация) — выполнена; CI в `.github/workflows`, приёмка в `docs/VERIFICATION.md`.
+- SaaS-контур (PRD v2 / System Design v1): фундамент (`deploy/` — Compose + nginx TLS 443 + PostgreSQL + MinIO),
+  auth (организации/роли, SMTP), billing (ЮKassa), **проекты и файлы в облаке** (`services/api`:
+  гибрид S3+PostgreSQL, изоляция по `org_id`, версии, конвертер ADR-7) — реализованы;
+  `domain-worker` (Dart VM + `packages/core`) и `flutter-web-adapt` — следующие задачи.
 
 ## Сквозной сценарий
 

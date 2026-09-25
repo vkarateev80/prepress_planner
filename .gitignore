@@ -30,6 +30,9 @@ pytest-cache-files-*/
 # Артефакты конвертера (runtime: загрузки и результаты джобов)
 /services/converter/data/
 /services/license/*.db
+# Локальная SQLite billing/auth (runtime: PP_DATA_DIR по умолчанию — <сервис>/data)
+/services/payments/data/
+/services/auth/data/
 
 # ── ОС / IDE ──
 Thumbs.db
@@ -47,3 +50,8 @@ Thumbs.db
 /app/state/
 /packages/core/pubspec.lock
 /test/
+
+# ── Локальная копия кириллического TTF для e2e/тестов: fontPathForCyrillic()
+# ищет шрифт обходом ВНИЗ от текущего каталога, поэтому копия лежит рядом с
+# packages/core (на Windows шрифт берётся из C:\Windows\Fonts) ──
+/packages/core/assets/fonts/

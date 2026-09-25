@@ -1,5 +1,8 @@
 fastapi
 uvicorn
 pydantic
+# ЮKassa вызывается напрямую через urllib (SDK не нужен).
+# psycopg2 нужен только при DB_URL=postgresql:// (в остальных случаях — SQLite).
+psycopg2-binary; python_version >= "3.8"
 pytest
 httpx

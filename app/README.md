@@ -12,15 +12,19 @@
 - `lib/src/projects/project.dart` — `Project` + `ProjectStore` (JSON v2 на диске).
 - `lib/src/screens/*` — экраны; `lib/src/widgets/*` — форма раскроя, таблица вариантов, canvas.
 - `lib/src/converter/` — HTTP-клиент к сервису конвертации (`ConverterApi`, dart:io, без
-  внешних пакетов): импорт закрытых форматов AI/CDR/EPS → SVG. Адрес по умолчанию
-  `http://193.233.193.12:8120` (VPS-сервер), переопределяется env `PP_CONVERTER_URL`
-  или кнопкой в UI экрана «Геометрия».
+  внешних пакетов): импорт закрытых форматов AI/CDR/EPS → SVG. Зашитый IP удалён
+  (ADR-6): на web дефолт — тот же origin (`/convert` через edge nginx), на
+  desktop — локальный `http://127.0.0.1:8120`; переопределяется env
+  `PP_CONVERTER_URL`. В SaaS-контуре конвертацию выполняет `services/api`
+  сервер-к-серверу (`services/api/README.md`, ADR-7).
 - `lib/license/` — аккаунт и подписка: `AccountGateway` (HTTP к микросервисам
-  auth/payments, VPS), `LicenseController` (сессия, синхронизация подписки,
+  auth/payments), `LicenseController` (сессия, синхронизация подписки,
   покупка, офлайн-фолбэк), `EntitlementStore` (кэш + грэйс 30 дн.), `FeatureGate`
   (Free/Pro, триал), `TrialTimer`, `AccountScreen` (вход/регистрация),
   `PaywallScreen` + хелперы `openPaywall`/`showProSheet`. Адреса: env
-  `PP_AUTH_URL`/`PP_PAYMENTS_URL` (по умолчанию VPS 8121/8122).
+  `PP_AUTH_URL`/`PP_PAYMENTS_URL` (desktop — локальные 8121/8122, web — тот же
+  origin; зашитых IP нет). Desktop-клиент — совместимость: SaaS-путь (роли,
+  организации, серверные сессии) подключает задача `flutter-web-adapt`.
 
 ## Импорт файлов
 
