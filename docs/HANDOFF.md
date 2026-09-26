@@ -6,6 +6,9 @@
 > Прочитайте его целиком перед любой работой.
 
 - **Дата подготовки:** переезд (снимок состояния на коммит `35a5711`, ветка `master`, 25 коммитов, дерево чистое).
+- **Актуальность:** обновлено 2026-09-26 — снимок на коммит `285347b`, ветка **`main`**,
+  46 коммитов, дерево чистое; выполнены SaaS-контур (api/domain-worker/reports),
+  `flutter-web-adapt` целиком, эксплуатация (TLS/nginx/PG/бэкапы) — см. §12 и `docs/VERIFICATION.md` §8.
 - **Проект:** «Препресс-Планер» — мультиплатформенное (iOS · Windows · macOS · Linux) приложение
   препресс-планирования расходных материалов и экономико-технического обоснования (ТЭО) тиражей этикеток.
 - **Парадигма (утверждена заказчиком):** планирование расходных материалов препресса + ТЭО.
@@ -53,9 +56,12 @@
 | Ф3 | Flutter UI (MVP, 5 вкладок) | ✅ `7196c01` |
 | Ф4 | конвертер + лицензии + подписка (триал 15 дн.) | ✅ `7840767`, `426cc41`, `68c566c` |
 | Ф5 | CI, E2E, верификация | ✅ `bb1a7c3`, `6b274c0` |
+| SaaS | `services/api`, `domain-worker`, отчёты §12.8, облачные проекты/файлы (`flutter-web-adapt`), эксплуатация (dev-TLS, `nginx -t`, PostgreSQL-тесты, `backup.sh`, миграция образов MinIO) | ✅ коммиты `742b08b`…`285347b` (2026-09-26) |
 
 **Цель (goal) закрыта.** Все критерии приёмки §10 спеки подтверждены живыми прогонами —
-см. `docs/VERIFICATION.md` (заполнено фактическими выводами, не обещаниями).
+см. `docs/VERIFICATION.md` (заполнено фактическими выводами, не обещаниями;
+§8 — сводка прогонов от 2026-09-26: pytest 143, flutter 50/50, E2E 1:1,
+`nginx -t`, `docker compose config`, бэкапы).
 
 ### Эталонные числа (самопроверка после переезда)
 
@@ -65,25 +71,35 @@
   runTime≈0.0057 ч, загрузка смены 6.32%.
 - E2E печатает всё это и завершается `E2E OK`, код выхода 0.
 
-## 3. Как проверить на новом месте (5 команд)
+## 3. Как проверить на новом месте (команды)
 
-```powershell
-# 1. Домен (из корня; dart берётся из .tools или PATH)
-powershell -File scripts/run_domain_tests.ps1        # → ALL PASS (16 files)
+```bash
+# 1. Домен (из корня)
+bash scripts/run_domain_tests.sh                  # → ALL PASS (16 файлов)
+(cd packages/core && dart tool/e2e.dart)           # → E2E OK
 
-# 2. E2E (из packages/core)
-& '<корень>\.tools\dart-sdk\bin\dart.exe' tool/e2e.dart   # → E2E OK
+# 2. domain-worker (из корня; analyze + тесты + эталон + отчёты)
+bash scripts/run_domain_worker_tests.sh           # → ALL PASS (domain-worker)
 
-# 3. Flutter (из app) — нужен Flutter SDK
-flutter analyze      # → No issues found!
-flutter test         # → All tests passed! (15: 5 widget + 5 license + 5 license_ui)
+# 3. Flutter (из app)
+cd app && flutter analyze && flutter test && flutter build web --release
+#   → No issues found! / 50/50 / Built build/web
 
-# 4. Сервисы (из корня; python = venv или системный с нужными пакетами)
-python -m pytest services/converter/tests services/license/tests -q   # → 17 passed
+# 4. Сервисы (из корня): нужен Python ≥3.11 (код использует X | None;
+#    системный 3.9 НЕ подходит — сделайте python3.11 -m venv .venv и pip install
+#    fastapi uvicorn python-multipart pytest httpx sqlalchemy cryptography "pydantic[email]" psycopg2-binary)
+.venv/bin/python -m pytest services/converter/tests services/auth/tests \
+  services/payments/tests services/api/tests services/license/tests -q   # → 143 passed, 1 skipped
 
-# 5. Греп-контроль (в core нет маски/G-кода)
+# 5. То же на реальном PostgreSQL 16 (docker): PP_TEST_DB_URL=postgresql://… pytest …
+#    (общие таблицы чистит services/api/tests/conftest.py)
+
+# 6. Греп-контроль (в core нет маски/G-кода)
 grep -riE 'uv_mask|gcode|g_code|уф|уп' packages/core/lib   # → 0 (кроме «управляющие символы» в XML-комментарии)
 ```
+
+CI (`.github/workflows/ci.yml`) — **5 джоб**: domain, domain-worker, flutter, services (pytest),
+deploy (`docker compose config` + `nginx -t` обоих конфигов).
 
 ## 4. Что переносить (варианты)
 
@@ -113,12 +129,18 @@ grep -riE 'uv_mask|gcode|g_code|уф|уп' packages/core/lib   # → 0 (кром
 
 - **Домен:** только stdlib Dart. Тест-файл = скрипт: запуск `dart test/<file>.dart` из
   `packages/core`, код выхода 0 = успех. Баррел `prepress_core.dart` экспортирует всё.
-- **UI:** `HomeShell` (5 вкладок; десктоп — NavigationRail, узкий — NavigationBar).
-  `ProjectStore('projects')` — JSON v2 на диске. `LicenseController` в `main.dart`:
-  первый запуск → MachineId + офлайн-триал 15 дней → кэш `state/entitlement.json`.
+- **UI:** `HomeShell` (6 вкладок: + «Юридическая»; десктоп — NavigationRail, узкий — NavigationBar).
+  `ProjectStore('projects')` — два режима: локальный JSON v2 (desktop/localStorage) и
+  **облачный** (web + активная сессия → `services/api`, CRUD `/api/projects`, env `PP_API_URL`,
+  web-фолбэк `/api`). **Ловушка `env_web`:** `envOrDefault` на web возвращает именно
+  `fallback` (так чинился баг `285347b` — раньше всегда `''` и обнулял `/api`);
+  web-фолбэк для сервисов одного origin — пустая строка.
+  `LicenseController` в `main.dart`:
+  первый запуск → MachineId + офлайн-триал 15 дней → кэш `state/entitlement.json`;
+  `sessionToken` — Bearer для облачных вызовов.
   Гейтинг: `FeatureGate.hasProAccess` (Pro **или активный триал**); Free = 1 проект +
   прямоугольный расчёт; вкладки Геометрия/ТЭО/Отчёты и «Перебор вариантов» — Pro
-  (шторка «Доступно в Pro» → paywall). `purchase()` — заглушка до IAP.
+  (шторка «Доступно в Pro» → paywall). Web-сборка: `flutter build web --release` → `app/build/web`.
 - **Сервисы:** FastAPI, пакеты `converter_app`/`license_app` (имена НЕ `app` — коллизия).
   Лицензии: SQLite (наивный UTC `datetime.utcnow()`), HMAC offline-токены,
   грэйс 30 дней, триал 15 дней однократно. Конвертер: файловый stdio для движков,
@@ -149,6 +171,14 @@ Git на Windows: при «dubious ownership» добавлять `-c safe.direc
   `gswin32c` 8.64 (`C:\Program Files (x86)\gs\gs8.64`) и движок 10.07.1 в
   `cam_pipeline\ghostscript_engine`; конвертер ищет их автоматически (2026-09-03).
 - Файлы только UTF-8; PowerShell `Set-Content` портит кириллицу — писать через редактор/write.
+- **Образы MinIO удалены с Docker Hub** (архивация community-издания, Oct 2025 – фев 2026):
+  `minio/minio`/`minio/mc` → 404. Стек переведён на `alpine/minio:RELEASE.*` (пин,
+  `user: root` — тома root-овые, healthcheck на `wget`) + `amazon/aws-cli` вместо mc
+  (см. `deploy/README.md`). `quay.io/minio/*` из части сетей недоступен.
+- **Python:** сервисы требуют ≥3.11 (`X | None` в типах); системный 3.9 падает на
+  импорте. Рабочий вариант — `.venv` (python3.11), он в `.gitignore`.
+- **Порты:** 5432 может быть занят SSH-туннелем — для тестового PostgreSQL
+  публикуйте другой (например, 127.0.0.1:5433).
 
 ## 8. Конвенции проекта (соблюдать и дальше)
 
@@ -159,16 +189,26 @@ Git на Windows: при «dubious ownership» добавлять `-c safe.direc
 
 ## 9. Что дальше (открытые направления — выбирать заказчику)
 
-1. ~~Импорт AI/CDR/EPS из приложения~~ — **реализовано** (Ф6-01 + доработки 2026-09-03):
-   `ConverterApi` к `services/converter`; EPS чинится авто-поиском Ghostscript
-   (проверено EPS→SVG по HTTP на GS 8.64). Образец для проверки:
-   `samples/label_grid_5x6.svg`.
-2. **Windows-бинарь + запуск CI по-настоящему** — `.github/workflows` не прогонялись
-   (репозиторий не запушен). Внимание: services-джоба CI требует Inkscape на раннере —
-   `test_ai_to_svg_via_inkscape` скипается без него (skipif).
-3. **Docker-развёртывание** сервисов (Dockerfile есть) + .env для license.
-4. **iOS IAP (StoreKit)** — сейчас `purchase()`-заглушка; нужны macOS/Xcode + аккаунт разработчика.
-5. Сервер лицензий реально не развёрнут (локально только pytest).
+Закрыто в сеансе 2026-09-26: `flutter-web-adapt` (облачные проекты, серверная
+конвертация ADR-7, отчёты §12.8, файлы §12.5), эксплуатация (dev-TLS-скрипт,
+`nginx -t`, тесты на PostgreSQL 16, `deploy/backup.sh`, миграция образов MinIO,
+CI — 5 джоб). Подробности — §12 и `docs/VERIFICATION.md` §8.
+
+Остаётся:
+
+1. **Прод-TLS**: certbot для реального домена (`deploy/nginx/certs/` в .gitignore,
+   dev-сертификат — `bash deploy/nginx/gen_dev_certs.sh`).
+2. **Ключи ЮKassa** + регистрация webhook-URL; SMTP (`PP_SMTP_*`) для сброса паролей.
+3. **Offsite-копия** `deploy/backups/` (сегодня бэкапы локальные; в прод — cron
+   `bash deploy/backup.sh` + вынос на внешнее хранилище).
+4. **Живой UI-прогон web-сборки** (импорт файла → расчёт → PDF): automated-ввод
+   расширения браузера нестабилен (`filechooser: ambiguous routed session`) —
+   повторить на стабильном окружении или вручную по чек-листу §12.
+5. **Приглашения участников** (`POST /auth/orgs/{id}/members`) — F-19, не блокер.
+6. Чеки/автоплатежи ЮKassa (ADR-3), ретеншен bucket (в ILM-правилах MinIO-сборки
+   `AbortIncompleteMultipartUpload` молча отбрасывается — проверено), `nginx -t`
+   уже в CI.
+7. iOS IAP (StoreKit) — нужны macOS/Xcode + аккаунт разработчика.
 
 ## 10. Ключевые документы
 
@@ -274,3 +314,39 @@ Git на Windows: при «dubious ownership» добавлять `-c safe.direc
   не воспроизведены — механизм таймаута/статусов добавлен; проверить на реальных
   файлах. Коммит изменений (Ф6-01 + UI + массив + журнал + оптимизация лечения
   + «Применить» + режим мастера) не оформлен — на согласовании.
+
+---
+
+## 12. Сеанс 2026-09-26: SaaS-контур закрыт, эксплуатация, живой прогон
+
+**Коммиты (все в `main`, origin синхронен):**
+
+| Коммит | Содержание |
+|---|---|
+| `d7d9402` | Отчёты по API (§12.8): стадия `/reports` в domain-worker, `POST /api/projects/{id}/reports/{fmt}`, экспорт из UI через api |
+| `742b08b` | `flutter-web-adapt`: файлы в облако — `uploadSource` (§12.5), `GET /files/{id}/download`, `inputFileId` |
+| `2819439` | Эксплуатация: `gen_dev_certs.sh`, `nginx -t`, pytest на PostgreSQL 16, `backup.sh`, замена удалённых образов MinIO |
+| `82e2870` | Хвосты: `lastOriginalFileId` для закрытых форматов, CI-джоба `deploy`, удалён мёртвый `legal_nav.dart` |
+| `285347b` | **env_web-фикс** (см. ниже) + `docs/VERIFICATION.md` §8 |
+
+**Главный пойманный баг (env_web, `285347b`):** `env_web.envOrDefault` возвращал всегда
+`''`, игнорируя фолбэк → на web `ProjectsApi` ходил мимо `/api` → SPA отдавал HTML →
+`jsonDecode` падал (непойманные `Error` в консоли) → **облачное хранилище в прод-сборке
+не работало бы**. Unit-тесты не ловили (передают `baseUrl` явно). Найден только живым
+прогоном. Фикс: возврат `fallback` + `ApiException` на не-JSON ответ + тест-регрессия.
+
+**Живой прогон (macOS):** локальный стек без compose (5 сервисов + edge-nginx, см. §3)
+подтверждён в браузере: логин/сессия через перезагрузку, облачный список проектов,
+`POST /api/projects 201` + `PATCH 200`, `GET /projects/{id} 200`. Не доведён до конца
+импорт файла → расчёт → PDF: расширение браузера отдаёт `filechooser: ambiguous
+routed session`, синтетические клики нестабильны (сбой на стороне инструмента, не кода).
+Серверные пути этих операций покрыты pytest (143) и E2E (delta 0.0).
+
+**Технические заметки сеанса:**
+- `docker compose config` требует `PP_AUTH_SECRET` (секрет-плейсхолдер допустим в CI).
+- `nginx -t` в контейнере: апстримы через `--add-host <имя>:127.0.0.1`; для
+  `pp-web-tls.conf` нужен сертификат (генерируется скриптом).
+- ILM MinIO: `AbortIncompleteMultipartUpload` эта сборка молча отбрасывает
+  (проверено `put/get-bucket-lifecycle-configuration`) — ретеншен через api-версионирование.
+- Браузерный флоу: `MaterialApp.title` не обновляет `document.title` — состояние
+  проверять по скриншоту UI, а не по заголовку вкладки.
