@@ -9,6 +9,8 @@
 Контракт воркера (см. `services/domain-worker/README.md`):
     GET  /healthz            → {status, service, version, availableStages…}
     POST /calculate          → state v2 (синонимы: /calculation, /run, /pipeline)
+    POST /reports            → state v2 + stageResults.report (§12.8,
+                               {format, contentBase64, mime, name})
 
 Тело запроса воркера — camelCase-схема `project_state.json v2`
 (`app/lib/src/projects/project.dart`): `params` = `layoutParamsToJson`,
@@ -179,6 +181,17 @@ class DomainClient:
             self.timeout = max(1.0, timeout)
         return self._request("/calculate", payload)
 
+    def reports(self, payload: Dict[str, Any],
+                timeout: Optional[float] = None) -> Dict[str, Any]:
+        """`POST /reports` — цепочка + генерация отчёта (§12.8).
+
+        В ответе `stageResults.report` = `{format, name, mime, size,
+        contentBase64}` (см. `services/domain-worker/lib/src/report_stage.dart`).
+        """
+        if timeout is not None:
+            self.timeout = max(1.0, timeout)
+        return self._request("/reports", payload)
+
     # -- сборка запроса ---------------------------------------------------
     def build_payload(self, *, stages: Tuple[str, ...] = ("calc",),
                       name: str = "", params: Optional[Dict[str, Any]] = None,
@@ -188,11 +201,14 @@ class DomainClient:
                       catalog: Optional[Dict[str, Any]] = None,
                       variants_limit: int = 10,
                       include_raw_paths: bool = False,
-                      state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                      state: Optional[Dict[str, Any]] = None,
+                      report: Optional[Dict[str, Any]] = None
+                      ) -> Dict[str, Any]:
         """Собрать тело запроса воркера из контракта §12.6.
 
         `params` — уже `project_state.json v2` (camelCase) либо snake_case
-        `layout_params`: оба варианта нормализуются.
+        `layout_params`: оба варианта нормализуются. `report` — секция
+        отчёта для `POST /reports` (`{format, paths?, fontBase64?}`).
         """
         payload: Dict[str, Any] = {
             "stages": list(stages),
@@ -211,4 +227,6 @@ class DomainClient:
             payload["fileName"] = file_name or ""
         if state:
             payload["state"] = state
+        if report:
+            payload["report"] = report
         return payload

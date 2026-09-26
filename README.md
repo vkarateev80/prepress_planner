@@ -64,13 +64,15 @@ Python (для генерации золотых эталонов и вериф�
 - SaaS-контур (PRD v2 / System Design v1): фундамент (`deploy/` — Compose + nginx TLS 443 + PostgreSQL + MinIO),
   auth (организации/роли, SMTP), billing (ЮKassa), **проекты и файлы в облаке** (`services/api`:
   гибрид S3+PostgreSQL, изоляция по `org_id`, версии, конвертер ADR-7) — реализованы;
-  `domain-worker` (Dart VM + `packages/core`) — выполнен; `flutter-web-adapt` — начат:
-  в web-сборке проекты хранятся в `services/api` (`/api/projects`, Bearer-сессия,
-  env `PP_API_URL`), закрытые форматы конвертируются сервер-к-серверу
-  (multipart `convert=svg` → `GET /api/files/{id}/content`, ADR-7; без сессии —
-  фолбэк на прямой `/convert`). Остаются: скачивание файлов через
-  `GET /api/files/{id}/download` и генерация отчётов по запросу API
-  (`POST /api/projects/{id}/reports/...`).
+  `domain-worker` (Dart VM + `packages/core`) — выполнен; `flutter-web-adapt` —
+  практически выполнен: в web-сборке проекты хранятся в `services/api`
+  (`/api/projects`, Bearer-сессия, env `PP_API_URL`), закрытые форматы
+  конвертируются сервер-к-серверу (multipart `convert=svg` →
+  `GET /api/files/{id}/content`, ADR-7), отчёты PDF/XLSX/DXF генерируются
+  сервером (`POST /api/projects/{id}/reports/{fmt}` → воркер → хранилище,
+  §12.8); без сессии — фолбэк на локальные пути. Остаётся: скачивание
+  исходных файлов через `GET /api/files/{id}/download` (после перехода
+  импорта файлов в облако).
 
 ## Сквозной сценарий
 

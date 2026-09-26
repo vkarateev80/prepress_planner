@@ -100,6 +100,26 @@ class _FakeProjectsApi {
       await req.response.close();
       return;
     }
+    // Отчёты §12.8: генерация + скачивание.
+    final r = RegExp(r'^/api/projects/(p\d+)/reports/(pdf|xlsx|dxf)$')
+        .firstMatch(path);
+    if (r != null && req.method == 'POST') {
+      _json(req.response, 200, {
+        'project_id': r.group(1),
+        'report': {'id': 'rep1', 'kind': r.group(2), 'size_bytes': 10},
+        'download': '/reports/rep1/download',
+      });
+      await req.response.close();
+      return;
+    }
+    if (path == '/api/reports/rep1/download' && req.method == 'GET') {
+      req.response.statusCode = 200;
+      req.response.headers.contentType = ContentType.parse('application/pdf');
+      req.response.write('%PDF-fake');
+      await req.response.close();
+      return;
+    }
+
     final m = RegExp(r'^/api/projects/(p\d+)$').firstMatch(path);
     if (m != null && _projects.containsKey(m.group(1))) {
       final row = _projects[m.group(1)]!;
@@ -185,6 +205,24 @@ void main() {
         expect(e.statusCode, 403);
         expect(e.message, contains('Тариф ограничивает число проектов'));
       }
+    });
+
+    test('generateReport + reportDownload: §12.8 транспорт', () async {
+      final res = await api().generateReport(token, 'p1', 'pdf',
+          state: {'name': 'Кампания'},
+          layoutParams: {'labelW': 50},
+          fontBase64: 'QUJD');
+
+      expect(res['download'], '/reports/rep1/download');
+      expect(server.log, contains('POST /api/projects/p1/reports/pdf'));
+      expect(server.authHeaders.last, 'Bearer $token');
+      expect(server.lastBody?['font_base64'], 'QUJD');
+      expect((server.lastBody?['state'] as Map)['name'], 'Кампания');
+      expect((server.lastBody?['layout_params'] as Map)['labelW'], 50);
+
+      final bytes = await api().reportDownload(token, res['download'] as String);
+      expect(utf8.decode(bytes), '%PDF-fake');
+      expect(server.log.last, 'GET /api/reports/rep1/download');
     });
   });
 

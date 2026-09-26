@@ -24,6 +24,7 @@ import 'package:prepress_core/prepress_core.dart';
 
 import 'errors.dart';
 import 'params.dart';
+import 'report_stage.dart';
 import 'state.dart';
 
 /// Порядок стадий доменной цепочки (System Design §3.1 / ADR-2).
@@ -240,6 +241,15 @@ PipelineResult runPipeline(Map<String, dynamic> request) {
   if (needed.contains('teo')) {
     time('teo', () {
       stageResults['teo'] = teoStage(request, state);
+    });
+  }
+
+  // ---- report (§12.8, POST /reports) ----
+  // Не стадия цепочки, а надстройка над ней: генерация PDF/XLSX/DXF из
+  // состояния после расчёта — внутри того же изолята (ADR-2).
+  if (request['report'] is Map) {
+    time('report', () {
+      stageResults['report'] = reportStage(request, state);
     });
   }
 

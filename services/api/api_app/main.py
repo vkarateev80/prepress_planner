@@ -42,6 +42,7 @@ origin, nginx), ADR-7 (конвертер отдельным сервисом, �
     POST   /api/projects/{id}/teo/compare         → {comparison: …} (§12.6, F-15)
     POST   /api/projects/{id}/pipeline            → {state, result, reference} (§12.6)
     POST   /api/projects/{id}/calculate           → синоним /pipeline (UI-путь)
+    POST   /api/projects/{id}/reports/{fmt}       → отчёт PDF/XLSX/DXF (§12.8)
     GET    /api/orgs/{org_id}/catalog | PUT       → PriceCatalog организации
     GET    /healthz
 
@@ -1013,6 +1014,82 @@ def run_calculate(project_id: str = Path(...),
     """Синоним `/pipeline` (UI-путь «рассчитать проект», §12.6)."""
     return run_pipeline(project_id=project_id, body=body, org_id=org_id,
                         authorization=authorization)
+
+
+class ReportBody(CalculationBody):
+    """Тело запроса отчёта (§12.8): поля расчёта + отчётные."""
+    font_base64: Optional[str] = Field(
+        default=None, description="DejaVuSans.ttf в base64 — кириллица PDF")
+    paths: Optional[str] = Field(
+        default=None, description="Для dxf: master (по умолчанию) | array")
+    state: Optional[Dict[str, Any]] = Field(
+        default=None, description="project_state.json v2 (геометрия для DXF)")
+
+
+@app.post("/projects/{project_id}/reports/{fmt}")
+def generate_report(project_id: str = Path(...),
+                    fmt: str = Path(...),
+                    body: ReportBody = ReportBody(),
+                    org_id: Optional[str] = Query(default=None),
+                    authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+    """Сгенерировать отчёт PDF/XLSX/DXF (§12.8, F-16…F-18).
+
+    Путь: `domain-worker` `POST /reports` (цепочка + генерация в изоляте,
+    ADR-2) → объектное хранилище (ADR-5) → строка `reports`. Скачивание —
+    `GET /api/reports/{id}/download`. Тело как у расчёта (`layout_params`,
+    `teo_input`, `file_version_id`…), плюс `font_base64` (кириллица PDF),
+    `paths` (dxf: master|array) и `state` (состояние проекта с геометрией).
+    """
+    cfg = get_config()
+    principal, membership = require_role(cfg, authorization, org_id, "member")
+    fmt = (fmt or "").strip().lower()
+    if fmt not in ("pdf", "xlsx", "dxf"):
+        raise ApiError(422, "invalid_format", "Формат отчёта: pdf, xlsx или dxf.")
+    _project_or_404(membership.org_id, project_id)
+
+    state = body.state if isinstance(body.state, dict) else None
+    has_geometry = bool(body.file_version_id or body.file_id) or bool(
+        state and state.get("rawPaths"))
+    stages = ["all"] if has_geometry else ["calc", "variants", "teo"]
+    file_base64, file_name = _file_bytes_for_domain(membership.org_id, body)
+    report: Dict[str, Any] = {
+        "format": fmt,
+        "paths": (body.paths or "master").strip().lower(),
+    }
+    if body.font_base64:
+        report["fontBase64"] = body.font_base64
+    payload = _domain().build_payload(
+        stages=tuple(stages),
+        name=body.name or f"Отчёт {fmt.upper()}",
+        params=body.layout_params,
+        teo_input=body.teo_input,
+        catalog=_project_catalog(membership.org_id, project_id, body.catalog),
+        file_base64=file_base64,
+        file_name=file_name,
+        variants_limit=body.limit or 10,
+        include_raw_paths=False,
+        state=state,
+        report=report,
+    )
+    # Отчёт (включая PDF со шрифтом) — дольше обычного расчёта.
+    result = _domain().reports(payload, timeout=max(cfg.http_timeout, 120.0))
+    rep = _stage_result(result, "report")
+    # Контракт воркера — camelCase (`report_stage.dart`): contentBase64/mime/name.
+    content = rep.get("contentBase64") if isinstance(rep, dict) else None
+    if not content:
+        raise ApiError(502, "domain_bad_response",
+                       "Сервис расчётов не вернул отчёт.")
+    data = base64.b64decode(content)
+    row = get_repo().create_report(
+        membership.org_id, project_id, fmt, data,
+        created_by=principal.user_id,
+        mime=str(rep.get("mime") or ""),
+        name=str(rep.get("name") or ""))
+    return {
+        "project_id": project_id,
+        "report": repo_mod.report_json(row),
+        "download": f"/reports/{row['id']}/download",
+    }
 
 
 @app.post("/projects/{project_id}/calc")

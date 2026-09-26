@@ -117,6 +117,7 @@ curl -s localhost:8101/healthz | python3 -m json.tool
 | `GET` | `/status` | `/healthz` + метрики пула изолятов (`active`, `queued`, `maxConcurrent`), счётчики запросов |
 | `GET` | `/` | карта сервиса: маршруты, стадии, эталонные числа |
 | `POST` | `/calculate` | доменная цепочка. Алиасы: `/calculation`, `/run`, `/pipeline`, `/v1/calculate`, `/api/calculate` |
+| `POST` | `/reports` | цепочка + отчёт §12.8: тело `/calculate` плюс `report: {format: pdf\|xlsx\|dxf, paths?: master\|array, fontBase64?}` → `stageResults.report` = `{format, name, mime, size, contentBase64}` |
 | `POST` | `/<стадия>` | одна стадия: `parse`, `analyze`, `heal`, `pattern`, `calc`, `variants`, `teo` |
 
 Все расчёты выполняются в изоляте (`Isolate.spawn`), поэтому приём HTTP-запросов
@@ -251,6 +252,33 @@ POST /teo       → {"calc": …, "consumption": …, "shape": …, "teo": …, 
 Стадия сама подтягивает зависимости: `pattern` требует геометрию, `calc`/`variants`/`teo`
 считаются и без файла (только по параметрам), а если макет передан — он
 разбирается, чтобы `state.rawPaths` был заполнен.
+
+### 4.4 Отчёты (`POST /reports`, §12.8)
+
+Тело — как у `/calculate`, плюс секция `report`:
+
+```jsonc
+{"stages": ["calc", "teo"], "params": {…}, "state": {…},          // как /calculate
+ "report": {"format": "pdf",            // pdf | xlsx | dxf
+            "paths": "master",          // только dxf: master | array
+            "fontBase64": "…"}}         // TTF для кириллицы PDF
+```
+
+Ответ — обычный ответ цепочки плюс `stageResults.report`:
+
+```jsonc
+{"stageResults": {"report": {"format": "pdf", "name": "Проект_ТЭО.pdf",
+  "mime": "application/pdf", "size": 802658, "contentBase64": "JVBERi0…"}},
+ "state": {…}, "metrics": {…}}
+```
+
+Генерация идёт в том же изоляте (`lib/src/report_stage.dart`), теми же
+функциями `packages/core`, что и в UI. Шрифт PDF ищется в порядке:
+`report.fontBase64` → env `PP_FONT_PATH` → `app/assets/fonts/DejaVuSans.ttf`
+(от скрипта/рабочего каталога) → `fontPathForCyrillic()`; не найден —
+`400 bad_request` с русским сообщением. Ошибки данных — `422 geometry_error`
+(нет расчёта / нет геометрии / массив не распознан), неверный формат —
+`400 bad_request`.
 
 ---
 

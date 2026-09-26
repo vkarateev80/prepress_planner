@@ -207,6 +207,34 @@ class FakeDomain(DomainClient):
                                      "perLabelAreaMm2": 2032.0}},
         }
 
+    def reports(self, payload: Dict[str, Any], timeout=None) -> Dict[str, Any]:
+        """`POST /reports` (§12.8): цепочка + фейковый отчёт в base64."""
+        result = self.calculate(payload, timeout=timeout)
+        fmt = (payload.get("report") or {}).get("format") or "pdf"
+        content = _FAKE_REPORT[fmt]
+        result.setdefault("stageResults", {})["report"] = {
+            "format": fmt,
+            "name": f"fake-report.{fmt}",
+            "mime": _FAKE_REPORT_MIME[fmt],
+            "size": len(content),
+            "contentBase64": base64.b64encode(content).decode("ascii"),
+        }
+        return result
+
+
+# Байты «отчётов» для фейка воркера (структура проверяется в
+# services/domain-worker/test/report_stage_test.dart, здесь — транспорт).
+_FAKE_REPORT: Dict[str, bytes] = {
+    "pdf": b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF\n",
+    "xlsx": b"PK\x03\x04" + b"\x00" * 64,
+    "dxf": b"0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n",
+}
+_FAKE_REPORT_MIME: Dict[str, str] = {
+    "pdf": "application/pdf",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "dxf": "application/dxf",
+}
+
 
 def _principal(orgs, user_id="user-1", email="user@example.com") -> Principal:
     return Principal(user_id=user_id, email=email,
@@ -510,3 +538,97 @@ def test_worker_unavailable_is_503(env):
                     json={"layout_params": _layout_params()}, headers=_headers())
     assert resp.status_code == 503
     assert resp.json()["error"]["code"] == "domain_unavailable"
+
+
+# --- отчёты (§12.8): POST /projects/{id}/reports/{fmt} ----------------------
+
+def test_reports_pdf_stores_and_streams(env):
+    """PDF: воркер → base64 → хранилище → скачивание потоком."""
+    pid = _project(env)
+    resp = env.post(f"/api/projects/{pid}/reports/pdf",
+                    json={"layout_params": _layout_params(),
+                          "teo_input": _teo_input(),
+                          "font_base64": base64.b64encode(b"TTF-bytes").decode()},
+                    headers=_headers())
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    rep = body["report"]
+    assert body["project_id"] == pid
+    assert rep["kind"] == "pdf"
+    assert rep["size_bytes"] == len(_FAKE_REPORT["pdf"])
+    assert body["download"] == f"/reports/{rep['id']}/download"
+
+    dl = env.get(f"/api{body['download']}", headers=_headers())
+    assert dl.status_code == 200
+    assert dl.content == _FAKE_REPORT["pdf"]
+    assert dl.headers["content-type"].startswith("application/pdf")
+
+
+def test_reports_payload_translation_and_stages(env):
+    """Перевод §12.6 → воркер: camelCase params, секция report, fontBase64."""
+    pid = _project(env)
+    env.post(f"/api/projects/{pid}/reports/xlsx",
+             json={"layout_params": _layout_params()}, headers=_headers())
+    fake = api_main.STATE["domain"]
+    payload = fake.calls[-1]
+    assert payload["report"]["format"] == "xlsx"
+    assert payload["report"]["paths"] == "master"
+    assert "fontBase64" not in payload["report"]
+    # Без макета/геометрии — расчётная часть цепочки.
+    assert payload["stages"] == ["calc", "variants", "teo"]
+    assert payload["params"]["labelW"] == 50.0  # snake_case → camelCase
+
+
+def test_reports_with_state_geometry_uses_all_stages(env):
+    """state с rawPaths → стадии all (нужны heal/pattern для DXF)."""
+    pid = _project(env)
+    state = {"name": "Макет", "rawPaths": [
+        {"points": [[0, 0], [50, 0], [50, 30], [0, 30]], "closed": True}]}
+    resp = env.post(f"/api/projects/{pid}/reports/dxf",
+                    json={"layout_params": _layout_params(),
+                          "state": state, "paths": "array"},
+                    headers=_headers())
+    assert resp.status_code == 200, resp.text
+    payload = api_main.STATE["domain"].calls[-1]
+    assert payload["stages"] == ["all"]
+    assert payload["state"] == state
+    assert payload["report"]["paths"] == "array"
+    assert payload["report"]["format"] == "dxf"
+
+
+def test_reports_invalid_format_422(env):
+    pid = _project(env)
+    resp = env.post(f"/api/projects/{pid}/reports/docx",
+                    json={"layout_params": _layout_params()}, headers=_headers())
+    assert resp.status_code == 422
+    err = resp.json()["error"]
+    assert err["code"] == "invalid_format"
+    assert "pdf, xlsx или dxf" in err["message"]
+
+
+def test_reports_cross_tenant_403(env):
+    """Чужой проект недоступен даже при знании id (N-4)."""
+    pid = _project(env)  # TENANT_A
+    resp = env.post(f"/api/projects/{pid}/reports/pdf",
+                    json={"layout_params": _layout_params()},
+                    headers=_headers(TOKEN_B))
+    assert resp.status_code in (403, 404)
+
+
+class _ReportFailDomain(FakeDomain):
+    def reports(self, payload, timeout=None):
+        raise DomainError("Шрифт для кириллицы не найден: передайте "
+                          "report.fontBase64 либо задайте PP_FONT_PATH.",
+                          status=400, code="bad_request")
+
+
+def test_reports_domain_error_translates(env):
+    """Ошибка воркера (например, шрифт) уходит клиенту как есть (§12.1)."""
+    api_main.STATE["domain"] = _ReportFailDomain()
+    pid = _project(env)
+    resp = env.post(f"/api/projects/{pid}/reports/pdf",
+                    json={"layout_params": _layout_params()}, headers=_headers())
+    assert resp.status_code == 400
+    err = resp.json()["error"]
+    assert err["code"] == "bad_request"
+    assert "Шрифт" in err["message"]

@@ -90,6 +90,37 @@ class _ReportsScreenState extends State<ReportsScreen> {
   void _log(String message, {LogLevel level = LogLevel.info}) =>
       AppLog.instance.record('Отчёты', message, level: level);
 
+  /// Облачный путь (web + активная сессия): отчёт генерирует `services/api`
+  /// через domain-worker (ADR-2, §12.8), затем скачиваем потоком.
+  /// null — вне облачного режима: генерация локально (как раньше).
+  Future<Uint8List?> _cloudReport(String fmt, {String? paths}) async {
+    final api = widget.store.api;
+    final project = widget.project;
+    if (api == null || project == null) return null;
+    final token = await widget.store.tokenProvider?.call();
+    if (token == null || token.isEmpty) return null;
+    final cloudId = await widget.store.ensureCloudId(project);
+    if (cloudId == null) return null;
+    final result = await api.generateReport(
+      token,
+      cloudId,
+      fmt,
+      state: project.toJson(),
+      layoutParams: layoutParamsToJson(project.params),
+      fontBase64: fmt == 'pdf' && _fontBytes != null
+          ? base64Encode(_fontBytes!)
+          : null,
+      paths: paths,
+    );
+    final download = result['download'];
+    if (download is! String || download.isEmpty) {
+      throw StateError('Сервис не вернул ссылку на отчёт.');
+    }
+    final bytes = await api.reportDownload(token, download);
+    _log('Отчёт $fmt сгенерирован на сервере (services/api, §12.8).');
+    return bytes;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -162,12 +193,18 @@ class _ReportsScreenState extends State<ReportsScreen> {
       _status = 'Формирование PDF…';
     });
     try {
-      final font = _fontBytes;
-      if (font == null) {
-        throw StateError('Кириллический шрифт не загружен (assets/fonts/'
-            'DejaVuSans.ttf)');
+      final Uint8List pdf;
+      final cloud = await _cloudReport('pdf');
+      if (cloud != null) {
+        pdf = cloud;
+      } else {
+        final font = _fontBytes;
+        if (font == null) {
+          throw StateError('Кириллический шрифт не загружен (assets/fonts/'
+              'DejaVuSans.ttf)');
+        }
+        pdf = await _buildPdfBytes(project, font);
       }
-      final pdf = await _buildPdfBytes(project, font);
       final where = await saveReport(_outDir, '04_ТЭО_Отчёт.pdf', pdf);
       if (mounted) {
         setState(() => _status =
@@ -189,7 +226,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
       _status = 'Формирование XLSX…';
     });
     try {
-      final xlsx = await _buildXlsxBytes(project);
+      final xlsx =
+          await _cloudReport('xlsx') ?? await _buildXlsxBytes(project);
       final where = await saveReport(_outDir, '05_Расчёт.xlsx', xlsx);
       if (mounted) {
         setState(() => _status =
@@ -211,15 +249,15 @@ class _ReportsScreenState extends State<ReportsScreen> {
       _status = 'Формирование DXF…';
     });
     try {
-      final master = await _buildMasterDxfText(project);
+      final master = await _cloudReport('dxf', paths: 'master') ??
+          Uint8List.fromList(utf8.encode(await _buildMasterDxfText(project)));
       final names = <String>['02_Вылеченный_Мастер.dxf'];
-      await saveReport(_outDir, '02_Вылеченный_Мастер.dxf',
-          Uint8List.fromList(utf8.encode(master)));
+      await saveReport(_outDir, '02_Вылеченный_Мастер.dxf', master);
       if (project.arrayPaths.isNotEmpty) {
-        final arr = await _buildArrayDxfText(project);
+        final arr = await _cloudReport('dxf', paths: 'array') ??
+            Uint8List.fromList(utf8.encode(await _buildArrayDxfText(project)));
         names.add('03_Раскрой.dxf');
-        await saveReport(_outDir, '03_Раскрой.dxf',
-            Uint8List.fromList(utf8.encode(arr)));
+        await saveReport(_outDir, '03_Раскрой.dxf', arr);
       }
       final statusText = isWeb
           ? 'Экспортировано: ${names.join(', ')}'

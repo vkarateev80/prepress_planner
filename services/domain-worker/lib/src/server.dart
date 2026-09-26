@@ -215,12 +215,27 @@ class DomainWorkerService {
 
     _checkAuth(request);
 
+    if (path == '/reports') {
+      // Отчёты §12.8: та же цепочка, что /calculate, плюс секция
+      // `report: {format, paths?, fontBase64?}` → stageResults.report.
+      final body = await _readBody(request);
+      final payload = parseRequestBody(body);
+      if (payload['report'] is! Map) {
+        throw WorkerError.badRequest(
+            'Для /reports укажите report: '
+            '{"format": "pdf" | "xlsx" | "dxf", "paths"?, "fontBase64"?}.');
+      }
+      final result = await executor.run(payload);
+      await _sendJson(request, HttpStatus.ok, result);
+      return;
+    }
+
     final stagePath = _stageFromPath(path);
     if (stagePath == null) {
       throw WorkerError(
         'not_found',
         'Маршрут $path не найден. Доступны: /healthz, /status, /calculate, '
-        '/${kStageOrder.join(', /')}.',
+        '/reports, /${kStageOrder.join(', /')}.',
         httpStatus: 404,
       );
     }
@@ -257,6 +272,7 @@ class DomainWorkerService {
           'GET /healthz',
           'GET /status',
           'POST /calculate (синонимы: /calculation, /run, /v1/calculate)',
+          'POST /reports (PDF/XLSX/DXF, §12.8)',
           for (final s in kStageOrder) 'POST /$s',
         ],
         'stages': kStageOrder,

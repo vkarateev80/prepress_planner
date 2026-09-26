@@ -137,6 +137,7 @@ reports(id PK, org_id, project_id, file_id, kind TEXT CHECK(kind IN ('pdf','xlsx
 | `POST /api/projects/{id}/pipeline` | `{file_id?, file_version_id?, layout_params, teo_input?, catalog?}` | `200 {state, result, metrics, reference}` (§12.6, §3.3 С5) |
 | `POST /api/projects/{id}/calculate` | то же | синоним `/pipeline` (UI-путь «рассчитать») |
 | `GET /api/projects/{id}/reports` | — | `200 {items:[report]}` |
+| `POST /api/projects/{id}/reports/{fmt}` | `fmt=pdf\|xlsx\|dxf`; тело расчёта + `font_base64`, `paths` (master\|array), `state` | `200 {project_id, report, download}` — генерация через воркер (§12.8) |
 | `GET /api/reports/{id}` / `/api/reports/{id}/download` | — | метаданные + `download_url` / поток |
 | `GET /api/orgs/{org_id}/catalog` / `PUT` | `{catalog}` | `200 {catalog}` |
 | `GET /healthz` | — | статус, БД, хранилище, лимиты, таблицы |
@@ -240,21 +241,26 @@ CP=3.175, cyl=web=300, mode=count, count=5000`: получены `9×5`, `5040`,
   + эндпоинты §12.6 (`calc`/`variants`/`teo`/`teo/compare`/`pipeline`/
   `calculate`) подключены к воркеру 8101; эталон PRD §10.2 сверен вживую
   (`scripts/run_api_e2e.sh`, delta 0.0).
-- **Отчёты** (§12.8): таблица и раздача (`GET /api/reports/...`) есть; вывод
-  PDF/XLSX/DXF доменом подтверждён (`services/domain-worker/tool/verify_reports.dart`,
-  22 проверки), но **генерация отчёта по запросу API ещё не подключена**
-  (`POST /api/projects/{id}/reports/{pdf|xlsx|dxf}` → сохранение в хранилище
-  + запись в `reports`) — следующая задача.
-- **`flutter-web-adapt`** (начато): проекты переведены на `/api/projects/...` —
+- **Отчёты** (§12.8) — **сделано**: `POST /api/projects/{id}/reports/{fmt}` →
+  воркер `POST /reports` (генерация в изоляте, ADR-2;
+  `services/domain-worker/lib/src/report_stage.dart`) → объектное хранилище +
+  строка `reports`; скачивание `GET /api/reports/{id}/download`. UI
+  (`app/lib/src/screens/reports_screen.dart`) в web-сессии генерирует отчёты
+  сервером и присылает `font_base64` (кириллица PDF); локальный путь
+  остаётся фолбэком. Тесты: `services/api/tests/test_api_domain.py` (6),
+  `services/domain-worker/test/report_stage_test.dart` (6).
+- **`flutter-web-adapt`** (почти): проекты переведены на `/api/projects/...` —
   `ProjectStore` в web-сборке при активной сессии хранит состояние проекта в
   `state_json` (`app/lib/src/projects/cloud_projects.dart`, env `PP_API_URL`);
   dev-nginx (`deploy/nginx/pp-web.conf`) получил `location /api/`. Конвертация
   закрытых форматов идёт сервер-к-серверу (ADR-7): `ApiConverter`
   (`app/lib/src/converter/api_converter.dart`) → multipart
   `POST /api/projects/{id}/files` (`convert=svg`, синхронно) →
-  `GET /api/files/{id}/content?format=svg`; без сессии/проекта — фолбэк на
-  прямой `/convert`. Остаётся: blob-скачивание через
-  `GET /api/files/{id}/download`.
+  `GET /api/files/{id}/content?format=svg`; отчёты — через
+  `POST /api/projects/{id}/reports/{fmt}` (см. выше). Без сессии/проекта —
+  фолбэк на прямой `/convert` и локальную генерацию. Остаётся: blob-скачивание
+  исходных файлов через `GET /api/files/{id}/download` (когда файлы начнут
+  отдаваться из облака, а не импортироваться локально).
 - **Эксплуатация**: TLS-сертификаты (`deploy/nginx/certs`), тест против
   реального PostgreSQL (`PP_TEST_DB_URL`), ретеншен/бэкап bucket (lifecycle),
   проверка nginx-конфига `nginx -t` (в текущей среде Docker недоступен).

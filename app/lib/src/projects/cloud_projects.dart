@@ -118,6 +118,43 @@ class ProjectsApi {
     }
   }
 
+  /// Сгенерировать отчёт на сервере (§12.8): `POST /projects/{id}/reports/{fmt}`.
+  /// Ответ: `{project_id, report, download}` — `download` относительный путь
+  /// для [reportDownload].
+  Future<Map<String, dynamic>> generateReport(
+    String token,
+    String projectId,
+    String fmt, {
+    Map<String, dynamic>? state,
+    Map<String, dynamic>? layoutParams,
+    String? fontBase64,
+    String? paths,
+  }) =>
+      _request('POST', '/projects/$projectId/reports/$fmt', token,
+          body: {
+            if (layoutParams != null) 'layout_params': layoutParams,
+            if (state != null) 'state': state,
+            if (fontBase64 != null) 'font_base64': fontBase64,
+            if (paths != null) 'paths': paths,
+          });
+
+  /// Скачать отчёт потоком: `GET {base}{download}` (Bearer, §12.8).
+  Future<Uint8List> reportDownload(String token, String downloadPath) async {
+    final path = downloadPath.startsWith('/') ? downloadPath : '/$downloadPath';
+    try {
+      final resp = await httpRawGet('$_base$path',
+          headers: _auth(token), timeout: _timeout);
+      if (resp.status >= 200 && resp.status < 300) return resp.body;
+      throw ApiException(_detail(resp.text), statusCode: resp.status);
+    } on ApiException {
+      rethrow;
+    } on TimeoutException {
+      throw _noAnswer;
+    } on NetworkException {
+      throw _unavailable;
+    }
+  }
+
   Future<Map<String, dynamic>> _request(
       String method, String path, String token,
       {Object? body}) async {
