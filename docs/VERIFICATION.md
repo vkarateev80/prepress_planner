@@ -123,3 +123,46 @@
 - `cam_pipeline`/`cam_material` — легаси-оракул для сверки, не в продукте и не в git.
 
 Проект готов к деплою в production с реальными ключами и к дальнейшей эксплуатации (CI, наблюдаемость, резервные копии).
+
+---
+
+## 8. Актуализация (сессия26.09.2026) — фактические прогоны
+
+Окружение: macOS (arm64), Dart 3.13.4, Flutter 3.47.5, Python 3.11 (venv),
+Docker 29. Хэдлайн §7 «Flutter SDK в среде отсутствует» **устарел** —
+сборка и проверка выполнены здесь.
+
+### 8.1 Прогоны (все зелёные)
+
+| Контур | Команда | Результат |
+|---|---|---|
+| Домен | `scripts/run_domain_tests.sh` | ALL PASS (16 скриптов) + `tool/e2e.dart` → E2E OK |
+| domain-worker | `scripts/run_domain_worker_tests.sh` | ALL PASS: analyze, тесты, эталон PRD §10.2 (delta 0.0), расчётный путь (144 проверки), отчёты (22) |
+| Сервисы | `pytest converter/auth/payments/api/license` | **143 passed, 1 skipped** (SQLite) |
+| Сервисы на PostgreSQL 16 | `PP_TEST_DB_URL=postgresql://… pytest …` | **143 passed** (очистка общих таблиц — `services/api/tests/conftest.py`) |
+| Flutter | `flutter analyze` / `flutter test` / `flutter build web --release` | **0 issues** / **49/49** / сборка ОК |
+| Сквозной E2E | `scripts/run_api_e2e.sh` (живой воркер) | ALL PASS: `api → domain-worker → packages/core`, эталон 1:1 |
+| Инфраструктура | `docker compose config` (deploy+services), `nginx -t` (оба конфига) | OK; депрекация `listen…http2` устранена (`http2 on`) |
+
+### 8.2 Выполнено после первичной приёмки
+
+- **`flutter-web-adapt` — целиком**: облачные проекты (`/api/projects`,
+  `ProjectStore` web+сессия), серверная конвертация (ADR-7:
+  multipart `convert=svg` → `/files/{id}/content`), отчёты §12.8
+  (`POST /projects/{id}/reports/{fmt}` → стадия `/reports` воркера →
+  хранилище; UI шлёт `font_base64`), файлы §12.5 (загрузка исходников
+  `uploadSource`, скачивание `GET /files/{id}/download`, `inputFileId`
+  в т.ч. для закрытых форматов). Без сессии — локальные фолбэки.
+- **Эксплуатация**: `deploy/nginx/gen_dev_certs.sh` (dev-TLS, `certs/` в
+  `.gitignore`), `deploy/backup.sh` (pg_dump + `aws s3 sync`), CI — **5 джоб**
+  (домен, воркер, flutter, pytest, deploy-конфиги).
+- **Миграция образов MinIO**: официальные `minio/minio` и `minio/mc` удалены
+  с Docker Hub (архивация community-издания, см. `deploy/README.md`) — стек
+  переведён на `alpine/minio` (пин) + `amazon/aws-cli`; prod-развёртывание
+  с Docker Hub снова возможно «из коробки».
+
+### 8.3 Остаётся к production (внешние действия)
+
+- Ключи ЮKassa + регистрация webhook; `certbot` для реального домена;
+  offsite-копия `deploy/backups/`; приглашения участников (F-19);
+  чеки/автоплатежи ЮKassa (ADR-3) — без изменений относительно §7.

@@ -229,8 +229,21 @@ class ProjectsApi {
   Map<String, dynamic> _jsonOrThrow(int status, String text) {
     if (status >= 200 && status < 300) {
       if (text.isEmpty) return const {};
-      final j = jsonDecode(text);
-      return (j as Map).cast<String, dynamic>();
+      Object? parsed;
+      try {
+        parsed = jsonDecode(text);
+      } on FormatException {
+        // Прод-страховка: например, SPA-handler вернул index.html из-за
+        // неверного префикса адреса (PP_API_URL) — раньше это роняло
+        // непойманным исключением.
+        throw const ApiException(
+            'Сервис проектов вернул не-JSON ответ — проверьте адрес API.');
+      }
+      if (parsed is! Map) {
+        throw const ApiException(
+            'Сервис проектов вернул некорректный ответ.');
+      }
+      return parsed.cast<String, dynamic>();
     }
     throw ApiException(_detail(text), statusCode: status);
   }

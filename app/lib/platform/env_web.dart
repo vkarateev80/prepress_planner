@@ -1,6 +1,12 @@
 /// Окружение на web: переменных окружения нет.
+///
+/// Всегда возвращаем [fallback]: адреса в web-сборку не «вшиваются» через env,
+/// но вызывающий код сам задаёт web-повадку фолбэком (для сервисов одного
+/// origin — пустую строку, для `/api` — относительный префикс). Раньше здесь
+/// возвращался всегда `''`, что обнуляло `'/api'` у `ProjectsApi` и ломало
+/// все облачные вызовы на web (запросы уходили мимо префикса в SPA-handler).
 library;
 
 const bool isWeb = true;
 
-String envOrDefault(String key, String fallback) => '';
+String envOrDefault(String key, String fallback) => fallback;

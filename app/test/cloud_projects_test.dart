@@ -20,6 +20,9 @@ class _FakeProjectsApi {
   /// 403 plan_limit на POST /projects.
   bool denyCreate = false;
 
+  /// Ответы как у SPA-handler: 200 + index.html (режим бага «мимо /api»).
+  bool htmlMode = false;
+
   final _projects = <String, Map<String, dynamic>>{};
   int _seq = 0;
 
@@ -71,6 +74,13 @@ class _FakeProjectsApi {
     log.add('${req.method} $path');
     authHeaders.add(req.headers.value('Authorization'));
     if (req.method == 'POST') lastBody = await _body(req);
+    if (htmlMode) {
+      req.response.statusCode = 200;
+      req.response.headers.contentType = ContentType.html;
+      req.response.write('<!DOCTYPE html><html><body>SPA</body></html>');
+      await req.response.close();
+      return;
+    }
 
     if (path == '/api/projects' && req.method == 'GET') {
       _json(req.response, 200, {
@@ -231,6 +241,18 @@ void main() {
       } on ApiException catch (e) {
         expect(e.statusCode, 403);
         expect(e.message, contains('Тариф ограничивает число проектов'));
+      }
+    });
+
+    test('не-JSON ответ (HTML от SPA): ApiException, а не FormatException',
+        () async {
+      // Регрессия живого прогона: без префикса /api сервер отдаёт index.html.
+      server.htmlMode = true;
+      try {
+        await api().list(token);
+        fail('ожидался ApiException');
+      } on ApiException catch (e) {
+        expect(e.message, contains('не-JSON'));
       }
     });
 
