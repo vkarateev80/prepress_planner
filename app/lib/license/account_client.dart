@@ -227,7 +227,8 @@ class AuthApi {
     try {
       final resp = await httpJsonPost('$_base$path',
           json: body, timeout: _timeout);
-      if (resp.status == 200) {
+      // /auth/register отдаёт 201 Created — принимаем любые 2xx.
+      if (resp.status >= 200 && resp.status < 300) {
         final j = jsonDecode(resp.text) as Map<String, dynamic>;
         final token = j['token'] as String?;
         final user = j['user'] as Map<String, dynamic>?;

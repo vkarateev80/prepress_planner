@@ -1,5 +1,6 @@
 // Тесты аккаунта: вход/регистрация/выход (device_id 1/1), сброс пароля,
 // синхронизация подписки с сервера, покупка через gateway; офлайн-фолбэк.
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -249,5 +250,26 @@ void main() {
     expect(err, isNull);
     expect(lic.entitlement.pro, true);
     expect(lic.entitlement.source, 'local');
+  });
+
+  // Регрессия живого прогона 2026-09-26: services/auth отдаёт 201 Created,
+  // клиент принимал только 200 → регистрация падала с сырым JSON в UI.
+  test('AuthApi.register принимает 201 Created от /auth/register', () async {
+    final server = await HttpServer.bind('127.0.0.1', 0);
+    addTearDown(() => server.close(force: true));
+    server.listen((req) async {
+      expect(req.uri.path, '/auth/register');
+      req.response.statusCode = 201;
+      req.response.headers.contentType = ContentType.json;
+      req.response.write(jsonEncode({
+        'token': 'tok-201',
+        'user': {'email': 'new@example.com'},
+      }));
+      await req.response.close();
+    });
+    final api = AuthApi(baseUrl: 'http://127.0.0.1:${server.port}');
+    final session = await api.register('new@example.com', 'secret1', 'dev-1');
+    expect(session.token, 'tok-201');
+    expect(session.email, 'new@example.com');
   });
 }

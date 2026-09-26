@@ -201,9 +201,13 @@ CI — 5 джоб). Подробности — §12 и `docs/VERIFICATION.md` §
 2. **Ключи ЮKassa** + регистрация webhook-URL; SMTP (`PP_SMTP_*`) для сброса паролей.
 3. **Offsite-копия** `deploy/backups/` (сегодня бэкапы локальные; в прод — cron
    `bash deploy/backup.sh` + вынос на внешнее хранилище).
-4. **Живой UI-прогон web-сборки** (импорт файла → расчёт → PDF): automated-ввод
-   расширения браузера нестабилен (`filechooser: ambiguous routed session`) —
-   повторить на стабильном окружении или вручную по чек-листу §12.
+4. ~~**Живой UI-прогон web-сборки** (импорт файла → расчёт → PDF)~~ —
+   **ЗАКРЫТ** 2026-09-26 (сессия продолжения): сценарий целиком через UI,
+   эталон 1:1; найдены и исправлены два прод-бага — `AuthApi` не принимал
+   `201 Created` от `/auth/register` (регистрация падала) и `files_web.dart`
+   ждал `ByteBuffer` вместо приходящего на web `Uint8List` (веб-импорт молча
+   не работал). Подробности и доказательства — `docs/VERIFICATION.md` §9;
+   стек/скрипты прогона — `~/.pp_live/` (start.sh, stage*.js).
 5. **Приглашения участников** (`POST /auth/orgs/{id}/members`) — F-19, не блокер.
 6. Чеки/автоплатежи ЮKassa (ADR-3), ретеншен bucket (в ILM-правилах MinIO-сборки
    `AbortIncompleteMultipartUpload` молча отбрасывается — проверено), `nginx -t`
@@ -350,3 +354,42 @@ routed session`, синтетические клики нестабильны (�
   (проверено `put/get-bucket-lifecycle-configuration`) — ретеншен через api-версионирование.
 - Браузерный флоу: `MaterialApp.title` не обновляет `document.title` — состояние
   проверять по скриншоту UI, а не по заголовку вкладки.
+
+---
+
+## 13. Сеанс-продолжение 2026-09-26: живой UI-прогон web (§9 п.4 закрыт)
+
+**Сделано:**
+- Локальный стек поднят заново без compose (`~/.pp_live/start.sh` /
+  `stop.sh`; сервисы — полный detach через setsid, edge-nginx `pp-edge:8080`
+  с прокси на `host.docker.internal`; `api` — `PP_STORAGE_BACKEND=memory`).
+  Web пересобран после фикса env_web (прежняя сборка ему предшествовала).
+- Сценарий «регистрация → логин/сессия → облачный проект → импорт
+  `fixtures/petlya.svg` → раскрой → ТЭО → PDF/XLSX» прогнан через UI
+  Playwright-API (channel `chrome`, нативный перехват `filechooser` —
+  проблема прошлой сессии обойдена). Скрипты: `~/.pp_live/stage*.js`.
+
+**Два прод-бага, пойманные только живым прогоном (исправлены):**
+1. `AuthApi._post` (`app/lib/license/account_client.dart`) принимал только
+   `200`, а `/auth/register` отдаёт **201** → регистрация показывала сырой
+   JSON и не сохраняла сессию. Фикс: приём любых 2xx; регрессионный тест
+   `app/test/license_account_test.dart` (падает без фикса).
+2. `pickSingleFile` (`app/lib/platform/files_web.dart`) проверял
+   `result is ByteBuffer`, а на web `FileReader.result` — **Uint8List** →
+   выбор отбрасывался молча: **веб-импорт не работал вовсе**. Фикс: принимать
+   оба типа.
+
+**Проверки (зелёные):** `flutter analyze` 0 · `flutter test` **51/51** ·
+`flutter build web` ОК · эталон в облачном state и в скачанном
+`04_ТЭО_Отчёт.pdf` 1:1 (9×5, 5040, 112, 26.18 %, 304.8, 34137.6,
+704.88 ₽/1000, 3552.58, 2528.45, 1024.13, 0.0057 ч, 6.32 %) ·
+`05_Расчёт.xlsx` (3 листа) · непойманных ошибок консоли — 0.
+Подробности — `docs/VERIFICATION.md` §9.
+
+**Изменения в дереве (не закоммичены):** `account_client.dart`,
+`files_web.dart`, `license_account_test.dart`, `docs/VERIFICATION.md` (§9),
+этот файл (§9 п.4, §13). Стек работает (`~/.pp_live`) — остановить
+`bash ~/.pp_live/stop.sh`, если больше не нужен.
+
+**Остаётся из §9:** прод-TLS (certbot), ключи ЮKassa+webhook+SMTP,
+offsite-бэкапы, приглашения F-19, чеки/автоплатежи ADR-3, iOS IAP.

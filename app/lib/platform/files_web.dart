@@ -34,12 +34,15 @@ Future<FilePick?> pickSingleFile() async {
     final reader = html.FileReader();
     reader.onLoad.listen((_) {
       final result = reader.result;
-      if (result is ByteBuffer) {
-        completer.complete(
-            FilePick(f.name, result.asUint8List(0, result.lengthInBytes)));
-      } else {
-        completer.complete(null);
-      }
+      // На web FileReader.result приходит Uint8List, не ByteBuffer (живой
+      // прогон 2026-09-26: раньше проверка `is ByteBuffer` отбрасывала выбор
+      // молча и импорт файла не работал вовсе).
+      final Uint8List? bytes = result is Uint8List
+          ? result
+          : result is ByteBuffer
+              ? result.asUint8List(0, result.lengthInBytes)
+              : null;
+      completer.complete(bytes == null ? null : FilePick(f.name, bytes));
     });
     reader.onError.listen((_) => completer.complete(null));
     reader.readAsArrayBuffer(f);
