@@ -15,6 +15,7 @@ import 'package:prepress_core/prepress_core.dart';
 import '../../platform/env.dart';
 import '../../platform/files.dart';
 import '../../platform/isolates.dart';
+import '../../platform/save_out.dart';
 import '../converter/converter_api.dart';
 import '../converter/converter_server.dart';
 import '../logs/app_log.dart';
@@ -102,12 +103,18 @@ class GeometryScreen extends StatefulWidget {
   final Future<({List<CamPath> paths, List<Issue> issueList})> Function(
       String display)? processOverride;
 
+  /// Хранилище проектов: нужно для облачного синхронизации исходника
+  /// (`uploadSource`, §12.5) и скачивания оригинала (`inputFileId`).
+  /// null / без api — локальный режим, поведение не меняется.
+  final ProjectStore? store;
+
   const GeometryScreen(
       {super.key,
       required this.project,
       required this.onChange,
       this.converter,
-      this.processOverride});
+      this.processOverride,
+      this.store});
 
   @override
   State<GeometryScreen> createState() => _GeometryScreenState();
@@ -249,6 +256,17 @@ class _GeometryScreenState extends State<GeometryScreen> {
                       label: const Text('Импорт файла')),
                 ),
                 const SizedBox(width: 8),
+              ],
+              if (widget.store?.api != null &&
+                  widget.project?.inputFileId != null) ...[
+                const SizedBox(width: 8),
+                Tooltip(
+                  message: 'Скачать исходный файл проекта из облака.',
+                  child: OutlinedButton.icon(
+                      onPressed: _busy ? null : _downloadOriginal,
+                      icon: const Icon(Icons.download, size: 18),
+                      label: const Text('Скачать оригинал')),
+                ),
               ],
               _serverButton(),
             ],
@@ -591,7 +609,9 @@ class _GeometryScreenState extends State<GeometryScreen> {
       _status = 'Разбор файла…';
     });
     try {
-      await _parseAndApply(src, project);
+      final res = await _parseAndApply(src, project);
+      // Облачный режим: исходник уходит в services/api (§12.5), id — в проект.
+      await _syncSource(src, res.project);
     } catch (e) {
       if (mounted) setState(() => _status = 'Ошибка разбора: $e');
       _log('Ошибка разбора: $e', level: LogLevel.error);
@@ -617,8 +637,9 @@ class _GeometryScreenState extends State<GeometryScreen> {
         bytes: svg,
         display: src.display,
       );
-      final summary = await _parseAndApply(svgSource, project,
+      final parsed = await _parseAndApply(svgSource, project,
           progress: 'Разбор сконвертированного SVG…');
+      final summary = parsed.summary;
       if (mounted) {
         setState(() => _status = 'Конвертация успешна. $summary');
       }
@@ -627,11 +648,12 @@ class _GeometryScreenState extends State<GeometryScreen> {
       // .ai может оказаться PDF-совместимым — пробуем локальный разбор.
       if (src.name.toLowerCase().endsWith('.ai')) {
         try {
-          final summary = await _parseAndApply(src, project,
+          final res = await _parseAndApply(src, project,
               progress: 'Локальный разбор AI…');
+          await _syncSource(src, res.project);
           if (mounted) {
             setState(() => _status =
-                'Сервер недоступен — AI разобран локально как PDF. $summary');
+                'Сервер недоступен — AI разобран локально как PDF. ${res.summary}');
           }
         } catch (_) {
           if (mounted) {
@@ -659,7 +681,10 @@ class _GeometryScreenState extends State<GeometryScreen> {
   /// Источник проекта ([Project.inputFile]) — [source.display] (исходный файл
   /// пользователя). Разбор и анализ идут отдельными шагами с таймаутом, чтобы
   /// вместо «вечной загрузки» было видно текущий этап и понятную ошибку.
-  Future<String> _parseAndApply(_ImportFile source, Project project,
+  /// Разобрать байты и применить к проекту: возвращает обновлённый проект
+  /// и сводку (нужно для облачной синхронизации исходника).
+  Future<({Project project, String summary})> _parseAndApply(
+      _ImportFile source, Project project,
       {String progress = 'Разбор файла…'}) async {
     if (mounted) setState(() => _status = progress);
     final process = widget.processOverride;
@@ -702,13 +727,66 @@ class _GeometryScreenState extends State<GeometryScreen> {
       calc: project.calc,
       variants: project.variants,
       selectedVariantIndex: project.selectedVariantIndex,
+      // Новый файл — прежняя ссылка на исходник в облаке недействительна;
+      // после облачной загрузки (_syncSource) установится новая.
+      inputFileId: null,
     );
     final summary =
         'Загружено контуров: ${paths.length}; ошибок: ${issueList.length}.';
     if (mounted) setState(() => _status = summary);
     _log(summary);
     widget.onChange(updated);
-    return summary;
+    return (project: updated, summary: summary);
+  }
+
+  /// Облачная синхронизация исходника (`flutter-web-adapt`: picker →
+  /// multipart → метаданные, §12.5): после успешного локального разбора файл
+  /// уходит в `services/api`, `file_id` сохраняется в проекте — кнопка
+  /// «Скачать оригинал» качает blob через `GET /api/files/{id}/download`.
+  /// Вне облачного режима — no-op; ошибки не ломают импорт (только журнал).
+  Future<void> _syncSource(_ImportFile src, Project project) async {
+    final store = widget.store;
+    if (store?.api == null) return;
+    try {
+      final fileId = await store!.uploadSource(project, src.name, src.bytes);
+      if (fileId == null) return;
+      project.inputFileId = fileId;
+      widget.onChange(project); // сохранение области в проекте
+      _log('Исходник загружен в облако: ${src.name} (файл $fileId).');
+      if (mounted) setState(() {}); // показать кнопку «Скачать оригинал»
+    } catch (e) {
+      _log('Исходник не загружен в облако: $e', level: LogLevel.warning);
+    }
+  }
+
+  /// Скачать оригинальный файл из облака (`GET /files/{id}/download`).
+  Future<void> _downloadOriginal() async {
+    final store = widget.store;
+    final p = widget.project;
+    final fileId = p?.inputFileId;
+    if (store?.api == null || p == null || fileId == null) return;
+    setState(() => _busy = true);
+    try {
+      final token = await store!.tokenProvider?.call();
+      if (token == null || token.isEmpty) {
+        throw StateError('Сессия неактивна: вход в аккаунт для скачивания.');
+      }
+      final bytes = await store.api!.downloadFile(token, fileId);
+      final name = p.inputFile.isEmpty ? 'original.bin' : p.inputFile;
+      final base = name.split('/').last;
+      final where = await saveReport(store.directory, base, bytes);
+      if (mounted) {
+        setState(() => _status = isWeb
+            ? 'Оригинал скачан: $base'
+            : 'Оригинал сохранён: $where');
+      }
+      _log(isWeb ? 'Оригинал скачан: $base' : 'Оригинал сохранён: $where');
+    } catch (e) {
+      if (mounted) setState(() => _status = 'Ошибка скачивания: $e');
+      _log('Ошибка скачивания оригинала: $e', level: LogLevel.error);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   /// Выбор векторного файла встроенным диалогом (без внешних плагинов).

@@ -124,6 +124,7 @@ class _HomeShellState extends State<HomeShell> {
         project: project,
         onChange: _update,
         converter: _closedConverter(),
+        store: widget.store,
       ),
       LayoutScreen(
         project: project,

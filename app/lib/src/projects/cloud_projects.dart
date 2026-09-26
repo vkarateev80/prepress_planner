@@ -118,6 +118,51 @@ class ProjectsApi {
     }
   }
 
+  /// Загрузить исходный файл без конвертации (§12.5, picker → multipart):
+  /// метаданные + blob в хранилище. Ответ содержит `file_id`.
+  Future<Map<String, dynamic>> uploadFile(
+    String token,
+    String projectId,
+    String fileName,
+    List<int> bytes, {
+    String fileType = 'original',
+  }) async {
+    try {
+      final resp = await httpMultipartPost(
+        '$_base/projects/$projectId/files',
+        headers: _auth(token),
+        fieldName: 'file',
+        fileName: fileName,
+        fileBytes: bytes,
+        fields: {'file_type': fileType},
+        timeout: const Duration(seconds: 120),
+      );
+      return _jsonOrThrow(resp.status, resp.text);
+    } on ApiException {
+      rethrow;
+    } on TimeoutException {
+      throw _noAnswer;
+    } on NetworkException {
+      throw _unavailable;
+    }
+  }
+
+  /// Скачать blob файла: `GET /files/{id}/download` (stream, §12.5).
+  Future<Uint8List> downloadFile(String token, String fileId) async {
+    try {
+      final resp = await httpRawGet('$_base/files/$fileId/download',
+          headers: _auth(token), timeout: _timeout);
+      if (resp.status >= 200 && resp.status < 300) return resp.body;
+      throw ApiException(_detail(resp.text), statusCode: resp.status);
+    } on ApiException {
+      rethrow;
+    } on TimeoutException {
+      throw _noAnswer;
+    } on NetworkException {
+      throw _unavailable;
+    }
+  }
+
   /// Сгенерировать отчёт на сервере (§12.8): `POST /projects/{id}/reports/{fmt}`.
   /// Ответ: `{project_id, report, download}` — `download` относительный путь
   /// для [reportDownload].

@@ -67,6 +67,13 @@ LayoutParams layoutParamsFromJson(Map<String, dynamic> j) => LayoutParams(
 class Project {
   String name;
   String inputFile;
+
+  /// Идентификатор исходника в `services/api` (файлы облака, §12.5):
+  /// заполняется после облачной загрузки (`flutter-web-adapt`), используется
+  /// для скачивания blob через `GET /api/files/{id}/download`. null — файла
+  /// в облаке нет (desktop / анонимный режим).
+  String? inputFileId;
+
   LayoutParams params;
   List<CamPath> rawPaths;
   List<CamPath> healedPaths;
@@ -81,6 +88,7 @@ class Project {
   Project({
     required this.name,
     String? inputFile,
+    this.inputFileId,
     LayoutParams? params,
     List<CamPath>? rawPaths,
     List<CamPath>? healedPaths,
@@ -113,6 +121,7 @@ class Project {
         'calc': calc == null ? null : materialResultToJson(calc!),
         'variants': [for (final v in variants) materialResultToJson(v)],
         'selectedVariantIndex': selectedVariantIndex,
+        if (inputFileId != null) 'inputFileId': inputFileId,
         'updatedAt': updatedAt.toIso8601String(),
       };
 
@@ -151,6 +160,7 @@ class Project {
       calc: calc,
       variants: variants,
       selectedVariantIndex: (j['selectedVariantIndex'] as num?)?.toInt() ?? 0,
+      inputFileId: j['inputFileId'] as String?,
       updatedAt: DateTime.tryParse((j['updatedAt'] as String?) ?? '') ??
           DateTime.now(),
     );
@@ -382,5 +392,18 @@ class ProjectStore {
     if (existing != null) return existing['id'] as String;
     final created = await api!.create(token, p.name, p.toJson());
     return created['id'] as String;
+  }
+
+  /// Загрузить исходник в облако (§12.5: picker → multipart → метаданные);
+  /// возвращает `file_id` либо null, если облачный режим не активен.
+  Future<String?> uploadSource(
+      Project p, String fileName, List<int> bytes) async {
+    final token = await _cloudToken();
+    if (token == null) return null;
+    final cloudId = await ensureCloudId(p);
+    if (cloudId == null) return null;
+    final res = await api!.uploadFile(token, cloudId, fileName, bytes);
+    final id = res['file_id'];
+    return id is String && id.isNotEmpty ? id : null;
   }
 }

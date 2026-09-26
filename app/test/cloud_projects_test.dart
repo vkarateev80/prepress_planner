@@ -44,7 +44,13 @@ class _FakeProjectsApi {
   Future<Map<String, dynamic>> _body(HttpRequest req) async {
     final text = await utf8.decoder.bind(req).join();
     if (text.isEmpty) return {};
-    return (jsonDecode(text) as Map).cast<String, dynamic>();
+    try {
+      final j = jsonDecode(text);
+      if (j is Map) return j.cast<String, dynamic>();
+    } on FormatException {
+      // multipart/не-JSON: тело в тесте не используется.
+    }
+    return {};
   }
 
   void _json(HttpResponse resp, int status, Map<String, dynamic> body) {
@@ -100,6 +106,27 @@ class _FakeProjectsApi {
       await req.response.close();
       return;
     }
+    // Файлы §12.5: upload (без конвертации) + download blob.
+    final f = RegExp(r'^/api/projects/(p\d+)/files$').firstMatch(path);
+    if (f != null && req.method == 'POST') {
+      _json(req.response, 201, {
+        'file_id': 'f1',
+        'project_id': f.group(1),
+        'version': 1,
+        'file': {'id': 'f1', 'name': 'label.dxf'},
+      });
+      await req.response.close();
+      return;
+    }
+    if (path == '/api/files/f1/download' && req.method == 'GET') {
+      req.response.statusCode = 200;
+      req.response.headers.contentType =
+          ContentType.parse('application/octet-stream');
+      req.response.write('DXF-BYTES');
+      await req.response.close();
+      return;
+    }
+
     // Отчёты §12.8: генерация + скачивание.
     final r = RegExp(r'^/api/projects/(p\d+)/reports/(pdf|xlsx|dxf)$')
         .firstMatch(path);
@@ -224,6 +251,18 @@ void main() {
       expect(utf8.decode(bytes), '%PDF-fake');
       expect(server.log.last, 'GET /api/reports/rep1/download');
     });
+
+    test('uploadFile + downloadFile: §12.5 файлы', () async {
+      final res = await api()
+          .uploadFile(token, 'p1', 'label.dxf', [68, 88, 70]);
+      expect(res['file_id'], 'f1');
+      expect(server.log.single, 'POST /api/projects/p1/files');
+      expect(server.authHeaders.single, 'Bearer $token');
+
+      final bytes = await api().downloadFile(token, 'f1');
+      expect(utf8.decode(bytes), 'DXF-BYTES');
+      expect(server.log.last, 'GET /api/files/f1/download');
+    });
   });
 
   group('ProjectStore (облачный режим)', () {
@@ -262,6 +301,21 @@ void main() {
 
       await s.listNames();
 
+      expect(server.log, isEmpty);
+    });
+
+    test('uploadSource: file_id из облака; без токена — null без запросов',
+        () async {
+      final id = await store()
+          .uploadSource(Project(name: 'Кампания'), 'label.dxf', [68, 88, 70]);
+      expect(id, 'f1');
+      expect(server.log, contains('POST /api/projects')); // ensureCloudId
+      expect(server.log, contains('POST /api/projects/p1/files'));
+
+      final local = ProjectStore('projects',
+          api: api(), tokenProvider: () async => null);
+      server.log.clear();
+      expect(await local.uploadSource(Project(name: 'X'), 'a.dxf', [1]), isNull);
       expect(server.log, isEmpty);
     });
   });

@@ -249,18 +249,19 @@ CP=3.175, cyl=web=300, mode=count, count=5000`: получены `9×5`, `5040`,
   сервером и присылает `font_base64` (кириллица PDF); локальный путь
   остаётся фолбэком. Тесты: `services/api/tests/test_api_domain.py` (6),
   `services/domain-worker/test/report_stage_test.dart` (6).
-- **`flutter-web-adapt`** (почти): проекты переведены на `/api/projects/...` —
+- **`flutter-web-adapt` — выполнен**: проекты переведены на `/api/projects/...` —
   `ProjectStore` в web-сборке при активной сессии хранит состояние проекта в
   `state_json` (`app/lib/src/projects/cloud_projects.dart`, env `PP_API_URL`);
   dev-nginx (`deploy/nginx/pp-web.conf`) получил `location /api/`. Конвертация
-  закрытых форматов идёт сервер-к-серверу (ADR-7): `ApiConverter`
-  (`app/lib/src/converter/api_converter.dart`) → multipart
-  `POST /api/projects/{id}/files` (`convert=svg`, синхронно) →
-  `GET /api/files/{id}/content?format=svg`; отчёты — через
-  `POST /api/projects/{id}/reports/{fmt}` (см. выше). Без сессии/проекта —
-  фолбэк на прямой `/convert` и локальную генерацию. Остаётся: blob-скачивание
-  исходных файлов через `GET /api/files/{id}/download` (когда файлы начнут
-  отдаваться из облака, а не импортироваться локально).
+  закрытых форматов идёт сервер-к-серверу (ADR-7): `ApiConverter` → multipart
+  `POST /api/projects/{id}/files` (`convert=svg`) → `GET /api/files/{id}/content`.
+  Импорт локальных форматов: после разбора исходник уходит в
+  `POST /api/projects/{id}/files` (`ProjectStore.uploadSource`, §12.5:
+  picker → multipart → метаданные), `file_id` — в `Project.inputFileId`.
+  Отчёты — `POST /api/projects/{id}/reports/{fmt}` (см. выше). Скачивание
+  blob — `GET /api/files/{id}/download` (кнопка «Скачать оригинал» на
+  вкладке «Геометрия»). Без сессии/проекта — фолбэк на прямой `/convert`
+  и локальные пути.
 - **Эксплуатация**: TLS-сертификаты (`deploy/nginx/certs`), тест против
   реального PostgreSQL (`PP_TEST_DB_URL`), ретеншен/бэкап bucket (lifecycle),
   проверка nginx-конфига `nginx -t` (в текущей среде Docker недоступен).
