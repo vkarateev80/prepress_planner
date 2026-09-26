@@ -262,6 +262,13 @@ CP=3.175, cyl=web=300, mode=count, count=5000`: получены `9×5`, `5040`,
   blob — `GET /api/files/{id}/download` (кнопка «Скачать оригинал» на
   вкладке «Геометрия»). Без сессии/проекта — фолбэк на прямой `/convert`
   и локальные пути.
-- **Эксплуатация**: TLS-сертификаты (`deploy/nginx/certs`), тест против
-  реального PostgreSQL (`PP_TEST_DB_URL`), ретеншен/бэкап bucket (lifecycle),
-  проверка nginx-конфига `nginx -t` (в текущей среде Docker недоступен).
+- **Эксплуатация — выполнено** (среда с Docker): dev-сертификаты —
+  `deploy/nginx/gen_dev_certs.sh` (каталог `certs/` в `.gitignore`; прод —
+  certbot), `nginx -t` для `pp-web-tls.conf`/`pp-web.conf` в контейнере —
+  OK, тест `api` против реального PostgreSQL 16 (`PP_TEST_DB_URL`, все 143;
+  очистка общих таблиц — `tests/conftest.py`), бэкапы — `deploy/backup.sh`
+  (pg_dump + `aws s3 sync`). Важно: официальные образы `minio/*` удалены с
+  Docker Hub (см. `deploy/README.md`) — стек переведён на `alpine/minio` +
+  `amazon/aws-cli`; ILM `AbortIncompleteMultipartUpload` эта сборка
+  отбрасывает, возрастной expire не применяется намеренно. Остаётся:
+  certbot в проде и offsite-копия `backups/`.

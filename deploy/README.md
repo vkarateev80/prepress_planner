@@ -17,7 +17,10 @@
 | domain-worker (Dart VM, `packages/core`) | `domain-worker:8101` | — |
 
 Сертификаты TLS: положите `fullchain.pem` и `privkey.pem` в `deploy/nginx/certs/`
-(Let's Encrypt/certbot либо dev-сертификат) — иначе nginx не поднимется.
+(Let's Encrypt/certbot в проде) — иначе nginx не поднимется. Для стенда/проверки
+конфига есть `bash deploy/nginx/gen_dev_certs.sh` — генерирует самоподписанный
+сертификат на 365 дней (CN=localhost; каталог `certs/` в `.gitignore`, ключи
+в git не попадают).
 
 ## Содержимое
 - `docker-compose.yml` — полный стек (postgresql, minio, api, auth, billing,
@@ -55,6 +58,24 @@ cd stack/deploy && bash install_new_server.sh
 **3) Открыть:** `https://<домен>/` — единый origin (443). Внутренние порты
 (8100/8101/8120/8121/8122/5432/9000) наружу не публикуются; в dev-стеке
 `services/docker-compose.yml` они опубликованы для отладки.
+
+## Резервное копирование (DEPLOY_CHECKLIST §9)
+
+```bash
+cd deploy && bash backup.sh            # → ./backups/db_<метка>.sql.gz + ./backups/bucket/
+```
+`pg_dump` из контейнера `postgresql` + `aws s3 sync` bucket через сервис
+`minio-init` (каталог `backups/` в `.gitignore`). Каталоги томов см.
+«Перенос данных» ниже. Восстановление — в шапке скрипта.
+
+**Образ MinIO:** официальный `minio/minio` удалён с Docker Hub (MinIO
+заархивировала community-издание: удаление образов с Oct 2025, репозиторий
+заархивирован 13.02.2026; см. milvus-io/milvus#53430). Стек использует
+community-сборку `alpine/minio` с пиненным тегом (`user: root` — тома
+Docker root-овые). ILM-правило `AbortIncompleteMultipartUpload` эта сборка
+молча отбрасывает (проверено), возрастной expire живых объектов не применяется
+намеренно — чистку версий делает `api` (`PP_MAX_FILE_VERSIONS`), бэкапы —
+`backup.sh`.
 
 ## Перенос данных (если нужно)
 Тома: `pg-data` (метаданные проектов/файлов, подписки), `minio-data`

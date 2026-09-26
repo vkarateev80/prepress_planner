@@ -71,9 +71,13 @@ Python (для генерации золотых эталонов и вериф�
   локальных форматов загружаются в облако (`POST /api/projects/{id}/files`,
   §12.5) и скачиваются через `GET /api/files/{id}/download`, отчёты
   PDF/XLSX/DXF генерируются сервером (`POST /api/projects/{id}/reports/{fmt}`,
-  §12.8); без сессии — фолбэк на локальные пути. Из эксплуатации остаются:
-  TLS-сертификаты (`deploy/nginx/certs`), тест против реального PostgreSQL
-  (`PP_TEST_DB_URL`), `nginx -t`, ретеншен bucket.
+  §12.8); без сессии — фолбэк на локальные пути. Эксплуатация: dev-TLS
+  (`deploy/nginx/gen_dev_certs.sh`, прод — certbot), `nginx -t` обоих
+  конфигов проверен, тесты `api` на PostgreSQL 16 зелёные (`PP_TEST_DB_URL`),
+  бэкапы — `deploy/backup.sh` (pg_dump + `aws s3 sync`); официальные образы
+  `minio/*` удалены с Docker Hub — стек переведён на `alpine/minio` +
+  `amazon/aws-cli` (см. `deploy/README.md`). Остаётся: certbot в проде и
+  offsite-копия `backups/`.
 
 ## Сквозной сценарий
 

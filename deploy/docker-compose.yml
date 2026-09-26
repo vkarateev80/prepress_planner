@@ -41,7 +41,12 @@ services:
 
   # === Объектное хранилище (ADR-5) — S3-совместимое (MinIO для dev/prod-ready) ===
   minio:
-    image: minio/minio:latest
+    # Официальный minio/minio удалён с Docker Hub (MinIO заархивировала
+    # community-издание: удаление образов с Oct 2025, репозиторий заархивирован
+    # 13.02.2026 — см. minio/minio и milvus#53430). Используем community-сборку
+    # alpine/minio с пиненным тегом (quay.io/minio/* из части сетей недоступен).
+    image: alpine/minio:RELEASE.2025-10-15T17-29-55Z
+    user: root   # тома Docker создаются root, а в образе пользователь minio
     environment:
       # Для прода задайте свои ключи в .env (PP_OBJECT_STORAGE_*); дефолты —
       # только для dev. Bucket создаёт api при старте (публичный доступ закрыт).
@@ -54,11 +59,38 @@ services:
       # Консоль — только для администрирования; публичный доступ к объектам — через API/nginx (presigned URLs)
       - "127.0.0.1:9001:9001"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      # В образе alpine/minio есть wget, но нет curl.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9000/minio/health/live"]
       interval: 15s
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    networks:
+      - pp-net
+
+  # Одноразовая инициализация объектного хранилища: гарантирует bucket до
+  # старта api. Возрастной expire живых объектов НЕ включается намеренно
+  # (файлы проектов бессрочны; чистку устаревших версий делает api —
+  # PP_MAX_FILE_VERSIONS); ILM-правило AbortIncompleteMultipartUpload эта
+  # сборка MinIO молча отбрасывает (проверено). Бэкапы — deploy/backup.sh.
+  minio-init:
+    image: amazon/aws-cli:2.17.49
+    depends_on:
+      - minio
+    environment:
+      AWS_ACCESS_KEY_ID: ${PP_OBJECT_STORAGE_ACCESS_KEY:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${PP_OBJECT_STORAGE_SECRET_KEY:-minioadmin}
+      AWS_DEFAULT_REGION: us-east-1
+      ENDPOINT: http://minio:9000
+      BUCKET: ${OBJECT_STORAGE_BUCKET:-prepress-saas}
+    entrypoint: >
+      /bin/sh -c "
+      until curl -sf http://minio:9000/minio/health/live >/dev/null; do sleep 1; done;
+      aws --endpoint-url $${ENDPOINT} s3api head-bucket --bucket $${BUCKET} 2>/dev/null ||
+        aws --endpoint-url $${ENDPOINT} s3api create-bucket --bucket $${BUCKET} >/dev/null;
+      echo \"minio-init: bucket $${BUCKET} готов\";
+      exit 0"
+    restart: "no"
     networks:
       - pp-net
 

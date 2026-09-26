@@ -55,3 +55,7 @@ Thumbs.db
 # ищет шрифт обходом ВНИЗ от текущего каталога, поэтому копия лежит рядом с
 # packages/core (на Windows шрифт берётся из C:\Windows\Fonts) ──
 /packages/core/assets/fonts/
+
+# TLS-ключи (см. deploy/nginx/gen_dev_certs.sh; прод — certbot)
+deploy/nginx/certs/
+deploy/backups/

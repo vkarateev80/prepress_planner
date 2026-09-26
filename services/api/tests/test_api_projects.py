@@ -150,7 +150,8 @@ def test_healthz_reports_configuration(env):
     body = env.get("/healthz").json()
     assert body["status"] == "ok"
     assert body["service"] == "api"
-    assert body["db_kind"] == "sqlite"
+    assert body["db_kind"] == (
+        "postgresql" if os.environ.get("PP_TEST_DB_URL") else "sqlite")
     assert body["storage"] == "memory"
     assert body["max_mb"] == 50.0
     assert "storage_key" not in body  # секретов/ключей в healthz нет
