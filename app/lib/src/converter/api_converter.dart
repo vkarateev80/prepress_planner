@@ -21,6 +21,12 @@ class ApiConverter implements Converter {
   final Future<String?> Function() tokenProvider;
   final Future<String?> Function() projectIdProvider;
 
+  /// `file_id` загруженного **оригинала** последнего успешного вызова
+  /// [convertToSvg] (parent-файл в `services/api`, §12.5). null — конвертация
+  /// шла мимо api (фолбэк) или завершилась ошибкой. Читается сразу после
+  /// `convertToSvg` (UI однопоточный).
+  String? lastOriginalFileId;
+
   ApiConverter({
     required this.api,
     required this.tokenProvider,
@@ -36,6 +42,7 @@ class ApiConverter implements Converter {
     required String fileName,
     required Uint8List bytes,
   }) async {
+    lastOriginalFileId = null;
     final token = await tokenProvider();
     final projectId = await projectIdProvider();
     if (token == null || token.isEmpty || projectId == null) {
@@ -50,6 +57,8 @@ class ApiConverter implements Converter {
         throw const ConverterException(
             'Сервер не вернул сконвертированный файл.');
       }
+      // Оригинал уже в облаке (multipart той же загрузки) — запомним id.
+      lastOriginalFileId = (j['parent_file_id'] ?? j['file_id']) as String?;
       return await api.fileContent(token, convertedId, format: 'svg');
     } on ApiException catch (e) {
       throw ConverterException(e.message);

@@ -16,6 +16,7 @@ import '../../platform/env.dart';
 import '../../platform/files.dart';
 import '../../platform/isolates.dart';
 import '../../platform/save_out.dart';
+import '../converter/api_converter.dart';
 import '../converter/converter_api.dart';
 import '../converter/converter_server.dart';
 import '../logs/app_log.dart';
@@ -628,9 +629,14 @@ class _GeometryScreenState extends State<GeometryScreen> {
       _status = 'Конвертация закрытого формата на сервере…';
     });
     _log('Конвертация закрытого формата…');
+    final conv = _converter;
     try {
-      final svg = await _converter.convertToSvg(
+      final svg = await conv.convertToSvg(
           fileName: src.name, bytes: src.bytes);
+      // Оригинал закрытого формата уже в облаке (multipart ApiConverter) —
+      // забираем file_id, чтобы проект знал исходник («Скачать оригинал»).
+      final originalId =
+          conv is ApiConverter ? conv.lastOriginalFileId : null;
       // SVG разбирается сразу из байтов (временный файл не нужен).
       final svgSource = _ImportFile(
         name: 'converted.svg',
@@ -638,7 +644,7 @@ class _GeometryScreenState extends State<GeometryScreen> {
         display: src.display,
       );
       final parsed = await _parseAndApply(svgSource, project,
-          progress: 'Разбор сконвертированного SVG…');
+          progress: 'Разбор сконвертированного SVG…', fileId: originalId);
       final summary = parsed.summary;
       if (mounted) {
         setState(() => _status = 'Конвертация успешна. $summary');
@@ -648,9 +654,15 @@ class _GeometryScreenState extends State<GeometryScreen> {
       // .ai может оказаться PDF-совместимым — пробуем локальный разбор.
       if (src.name.toLowerCase().endsWith('.ai')) {
         try {
+          // Если загрузка в облако успела до сбоя конвертации — ссылаемся
+          // на неё и не грузим оригинал повторно.
+          final uploadedId =
+              conv is ApiConverter ? conv.lastOriginalFileId : null;
           final res = await _parseAndApply(src, project,
-              progress: 'Локальный разбор AI…');
-          await _syncSource(src, res.project);
+              progress: 'Локальный разбор AI…', fileId: uploadedId);
+          if (uploadedId == null) {
+            await _syncSource(src, res.project);
+          }
           if (mounted) {
             setState(() => _status =
                 'Сервер недоступен — AI разобран локально как PDF. ${res.summary}');
@@ -683,9 +695,12 @@ class _GeometryScreenState extends State<GeometryScreen> {
   /// вместо «вечной загрузки» было видно текущий этап и понятную ошибку.
   /// Разобрать байты и применить к проекту: возвращает обновлённый проект
   /// и сводку (нужно для облачной синхронизации исходника).
+  /// [fileId] — id уже загруженного в облако оригинала (закрытые форматы
+  /// через `ApiConverter`); для локальных форматов null — его заполняет
+  /// [_syncSource] после своей загрузки.
   Future<({Project project, String summary})> _parseAndApply(
       _ImportFile source, Project project,
-      {String progress = 'Разбор файла…'}) async {
+      {String progress = 'Разбор файла…', String? fileId}) async {
     if (mounted) setState(() => _status = progress);
     final process = widget.processOverride;
 
@@ -727,9 +742,10 @@ class _GeometryScreenState extends State<GeometryScreen> {
       calc: project.calc,
       variants: project.variants,
       selectedVariantIndex: project.selectedVariantIndex,
-      // Новый файл — прежняя ссылка на исходник в облаке недействительна;
-      // после облачной загрузки (_syncSource) установится новая.
-      inputFileId: null,
+      // Новый файл: прежняя ссылка на исходник в облаке недействительна.
+      // Для закрытых форматов id уже известен (загрузка шла в ApiConverter),
+      // для локальных появится после [_syncSource].
+      inputFileId: fileId,
     );
     final summary =
         'Загружено контуров: ${paths.length}; ошибок: ${issueList.length}.';

@@ -134,10 +134,17 @@ void main() {
     expect(server.uploadBody, contains('convert'));
     expect(server.uploadBody, contains('label.cdr'));
     expect(direct.called, isFalse);
+
+    // Оригинал в облаке: parent-файл мультипарт-загрузки (§12.5).
+    final conv = converter();
+    await conv.convertToSvg(
+        fileName: 'x.cdr', bytes: Uint8List.fromList([1]));
+    expect(conv.lastOriginalFileId, 'f0');
   });
 
   test('без токена: фолбэк на прямой services/converter', () async {
-    final svg = await converter(token: null).convertToSvg(
+    final conv = converter(token: null);
+    final svg = await conv.convertToSvg(
       fileName: 'label.cdr',
       bytes: Uint8List.fromList([1]),
     );
@@ -145,6 +152,7 @@ void main() {
     expect(direct.called, isTrue);
     expect(utf8.decode(svg), contains('direct'));
     expect(server.log, isEmpty);
+    expect(conv.lastOriginalFileId, isNull);
   });
 
   test('без облачного проекта: фолбэк на прямой services/converter', () async {
@@ -160,8 +168,9 @@ void main() {
 
   test('ошибка api: русское сообщение как ConverterException', () async {
     server.denyUpload = true;
+    final conv = converter();
     try {
-      await converter().convertToSvg(
+      await conv.convertToSvg(
         fileName: 'bad.cdr',
         bytes: Uint8List.fromList([9]),
       );
@@ -169,5 +178,7 @@ void main() {
     } on ConverterException catch (e) {
       expect(e.message, contains('Конвертация не удалась'));
     }
+    expect(conv.lastOriginalFileId, isNull,
+        reason: 'при ошибке загрузки id не запоминается');
   });
 }
