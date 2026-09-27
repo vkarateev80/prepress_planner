@@ -135,6 +135,8 @@ entitlement-синхронизация прав.
 | `YUKASSA_WEBHOOK_SECRET` | пусто | секрет HMAC-SHA256 вебхука; пусто → 503 |
 | `YUKASSA_API_URL` | `https://api.yookassa.ru/v3` | API ЮKassa (замена для песочницы/тестов) |
 | `YUKASSA_SAVE_PAYMENT_METHOD` | `0` | `1` — просить сохранить способ оплаты (автоплатежи; нужна активация у мерчанта) |
+| `YUKASSA_RECEIPT_ENABLED` | `1` | `0` — не добавлять объект `receipt` (чек) в создание платежа |
+| `YUKASSA_RECEIPT_VAT_CODE` | `1` | код НДС в чеке (`1` — НДС включён в цену; строка) |
 | `PP_TRIAL_DAYS` | `15` | срок триала (вне провайдера) |
 | `PP_PRO_MONTH_PRICE_RUB` | `990` | цена Pro-месяца (30 дней) |
 | `PP_PRO_YEAR_PRICE_RUB` | `9900` | цена Pro-года (365 дней) |
@@ -186,10 +188,11 @@ python -m pytest tests -q                                  # SQLite (по умо
 PP_TEST_DB_URL=postgresql://… python -m pytest tests -q    # та же сюита на PostgreSQL
 ```
 
-44 теста: тарифы и checkout, подпись вебхука (и отказ без секрета),
+51 тест: тарифы и checkout, подпись вебхука (и отказ без секрета),
 идемпотентность и продление от конца периода, триал → Free → Pro,
 отмена/возобновление, возврат (owner/admin; «в обработке» → вебхук), изоляция
-тенантов, отсутствие legacy `/confirm`, реальный HTTP-канал ЮKassa на локальном
+тенантов, отсутствие legacy `/confirm`, чек ЮKassa (`receipt`, ADR-3) и
+`save_payment_method`, реальный HTTP-канал ЮKassa на локальном
 заглушечном сервере (`tests/test_yookassa_http.py`).
 
 ## Осталось (вне объёма этой задачи)

@@ -3,8 +3,9 @@
 
 Проверяется продакшн-реализация `YooKassaProvider` на локальном заглушечном
 HTTP-сервере: Basic-аутентификация (shopId:secretKey), заголовок
-`Idempotence-Key`, тело запроса (`amount`, `confirmation.return_url`, `metadata`),
-разбор `confirmation_url` и возврата, а также обработка ошибок апстрима.
+`Idempotence-Key`, тело запроса (`amount`, `confirmation.return_url`, `metadata`,
+`receipt`, `save_payment_method`), разбор `confirmation_url` и возврата, а также
+обработка ошибок апстрима.
 
 Секреты в тестах — фиктивные; проверяется только формат заголовков.
 """
@@ -26,11 +27,13 @@ os.environ.setdefault("PP_AUTH_URL", "http://auth.test:8121")
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from payments_app import config  # noqa: E402
 from payments_app.db import Database  # noqa: E402
-from payments_app.provider import (ProviderError, WebhookSignatureError,  # noqa: E402
-                                   YooKassaProvider, compute_signature,
-                                   extract_signature, normalize_event,
-                                   verify_webhook_signature)
+from payments_app.provider import (ProviderError, ProviderNotConfigured,  # noqa: E402
+                                   UnconfiguredProvider, WebhookSignatureError,
+                                   YooKassaProvider, build_provider,
+                                   compute_signature, extract_signature,
+                                   normalize_event, verify_webhook_signature)
 from payments_app.store import BillingStore  # noqa: E402
 
 SHOP_ID = "test_shop"
@@ -143,6 +146,95 @@ def test_create_payment_upstream_error_is_wrapped(api, store):
     with pytest.raises(ProviderError) as exc:
         provider.create_payment(ORDER, PLAN)
     assert "400" in str(exc.value) and "invalid_request" in str(exc.value)
+
+
+def _pending_response(payment_id: str = "2f8f0e1e-0001-0000-0000-000000000001"):
+    """Успешный ответ POST /payments для заглушки ЮKassa."""
+    return (200, {
+        "id": payment_id,
+        "status": "pending",
+        "confirmation": {"type": "redirect",
+                         "confirmation_url": "https://yoomoney.ru/checkout/x"},
+    })
+
+
+def _provider(api, store) -> YooKassaProvider:
+    return YooKassaProvider(store, shop_id=SHOP_ID, secret_key=SECRET_KEY,
+                            webhook_secret="whsec", api_url=api)
+
+
+def test_create_payment_receipt_with_customer_email(api, store):
+    _StubHandler.responses = [_pending_response()]
+    provider = _provider(api, store)
+    provider.create_payment(ORDER, PLAN, customer_email="user@example.com")
+
+    receipt = _StubHandler.requests[0]["body"]["receipt"]
+    assert receipt["customer"] == {"email": "user@example.com"}
+    item = receipt["items"][0]
+    assert item["vat_code"] == 1  # YUKASSA_RECEIPT_VAT_CODE по умолчанию «1»
+    assert item["quantity"] == "1"
+    assert item["amount"] == {"value": "990.00", "currency": "RUB"}  # сумма заказа
+    assert item["payment_subject"] == "service"
+    assert item["payment_mode"] == "full_payment"
+    assert item["description"].startswith("Подписка ")
+    assert "Препресс-Планер" in item["description"]
+    assert len(item["description"]) <= 128  # ограничение ЮKassa на описание
+
+
+def test_create_payment_receipt_without_email_omits_customer(api, store):
+    _StubHandler.responses = [_pending_response()]
+    provider = _provider(api, store)
+    provider.create_payment(ORDER, PLAN)
+
+    receipt = _StubHandler.requests[0]["body"]["receipt"]
+    assert "customer" not in receipt  # email не передан — блока customer нет
+    assert receipt["items"], "items обязаны быть и без customer"
+
+
+def test_create_payment_receipt_disabled(api, store, monkeypatch):
+    monkeypatch.setenv("YUKASSA_RECEIPT_ENABLED", "0")
+    # config читает env на импорте, поэтому на время теста правим кэш конфига.
+    monkeypatch.setattr(config, "RECEIPT_ENABLED", False)
+    _StubHandler.responses = [_pending_response()]
+    provider = _provider(api, store)
+    provider.create_payment(ORDER, PLAN, customer_email="user@example.com")
+
+    assert "receipt" not in _StubHandler.requests[0]["body"]
+
+
+def test_create_payment_receipt_vat_code_from_env(api, store, monkeypatch):
+    monkeypatch.setenv("YUKASSA_RECEIPT_VAT_CODE", "2")
+    monkeypatch.setattr(config, "RECEIPT_VAT_CODE", "2")
+    _StubHandler.responses = [_pending_response()]
+    provider = _provider(api, store)
+    provider.create_payment(ORDER, PLAN)
+
+    assert _StubHandler.requests[0]["body"]["receipt"]["items"][0]["vat_code"] == 2
+
+
+def test_save_payment_method_env_sets_payload_flag(api, store, monkeypatch):
+    """YUKASSA_SAVE_PAYMENT_METHOD=1 → save_payment_method: true в payload."""
+    monkeypatch.setenv("YUKASSA_SAVE_PAYMENT_METHOD", "1")
+    # config читает env на импорте, поэтому на время теста правим кэш конфига;
+    # build_provider собирает провайдер из config — как в проде.
+    monkeypatch.setattr(config, "SAVE_PAYMENT_METHOD", True)
+    monkeypatch.setattr(config, "YUKASSA_SHOP_ID", SHOP_ID)
+    monkeypatch.setattr(config, "YUKASSA_SECRET_KEY", SECRET_KEY)
+    monkeypatch.setattr(config, "YUKASSA_WEBHOOK_SECRET", "whsec")
+    monkeypatch.setattr(config, "YUKASSA_API_URL", api)
+    monkeypatch.setattr(config, "YUKASSA_CONFIGURED", True)
+    _StubHandler.responses = [_pending_response()]
+    provider = build_provider(store)
+    provider.create_payment(ORDER, PLAN)
+
+    assert _StubHandler.requests[0]["body"]["save_payment_method"] is True
+
+
+def test_unconfigured_provider_accepts_customer_email_kwarg(store):
+    """Сигнатура совместима: email не ломает заглушку без ключей."""
+    provider = UnconfiguredProvider(store)
+    with pytest.raises(ProviderNotConfigured):
+        provider.create_payment(ORDER, PLAN, customer_email="user@example.com")
 
 
 def test_refund_posts_to_refunds_endpoint(api, store):

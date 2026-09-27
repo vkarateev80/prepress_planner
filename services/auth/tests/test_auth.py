@@ -484,3 +484,291 @@ def test_legacy_db_migration_keeps_data():
     assert lines[2] == "old-device"             # device_id сохранён
     assert lines[3] == "1"                      # пользователь сохранён
     assert lines[4] == "legacy-user"            # reset_codes связан с юзером
+
+
+# ---------- участники и приглашения (F-19, HANDOFF §9 п.5) ----------
+
+def _db():
+    return sqlite3.connect(str(Path(os.environ["PP_DATA_DIR"]) / "auth.db"))
+
+
+def test_list_members_sorted_and_requires_membership():
+    owner = _register(_email("m-owner"), org_name="Типография-участники")
+    org_id = owner["orgs"][0]["org_id"]
+    outsider = _register(_email("m-outsider"))
+
+    # Без членства — 403.
+    r = client.get(f"/auth/orgs/{org_id}/members",
+                   headers=_auth(outsider["token"]))
+    assert r.status_code == 403
+    assert client.get(f"/auth/orgs/{org_id}/members").status_code == 401
+
+    # Владелец видит себя; после добавления — двоих, порядок по created_at.
+    r = client.get(f"/auth/orgs/{org_id}/members",
+                   headers=_auth(owner["token"]))
+    assert r.status_code == 200
+    members = r.json()["members"]
+    assert len(members) == 1
+    assert members[0]["user_id"] == owner["user"]["id"]
+    assert members[0]["email"] == owner["user"]["email"]
+    assert members[0]["role"] == "owner"
+
+    r = client.post(f"/auth/orgs/{org_id}/members",
+                    json={"email": outsider["user"]["email"]},
+                    headers=_auth(owner["token"]))
+    assert r.status_code == 201 and r.json()["status"] == "added"
+
+    members = client.get(f"/auth/orgs/{org_id}/members",
+                         headers=_auth(owner["token"])).json()["members"]
+    assert [m["user_id"] for m in members] == [owner["user"]["id"],
+                                               outsider["user"]["id"]]
+    assert members[0]["created_at"] <= members[1]["created_at"]
+
+
+def test_add_existing_member_and_duplicate_409():
+    owner = _register(_email("a-owner"), org_name="Типография-добавление")
+    org_id = owner["orgs"][0]["org_id"]
+    existing = _register(_email("a-existing"))
+
+    r = client.post(f"/auth/orgs/{org_id}/members",
+                    json={"email": existing["user"]["email"]},
+                    headers=_auth(owner["token"]))
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["status"] == "added"
+    assert body["member"]["user_id"] == existing["user"]["id"]
+    assert body["member"]["role"] == "member"          # роль по умолчанию
+    assert body["member"]["invited_by"] == owner["user"]["id"]
+
+    # Повторное добавление — 409.
+    r = client.post(f"/auth/orgs/{org_id}/members",
+                    json={"email": existing["user"]["email"]},
+                    headers=_auth(owner["token"]))
+    assert r.status_code == 409
+
+    # role=viewer допустима.
+    other = _register(_email("a-viewer"))
+    r = client.post(f"/auth/orgs/{org_id}/members",
+                    json={"email": other["user"]["email"], "role": "viewer"},
+                    headers=_auth(owner["token"]))
+    assert r.status_code == 201 and r.json()["member"]["role"] == "viewer"
+
+
+def test_invite_unknown_email_code_in_dev_mode_and_hash_in_db():
+    owner = _register(_email("i-owner"), org_name="Типография-приглашения")
+    org_id = owner["orgs"][0]["org_id"]
+    unknown = _email("i-unknown")
+
+    # Приглашение несуществующего email: без SMTP код в ответе (dev-режим).
+    r = client.post(f"/auth/orgs/{org_id}/members", json={"email": unknown},
+                    headers=_auth(owner["token"]))
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["status"] == "invited"
+    assert body["smtp_sent"] is False
+    assert len(body["code"]) == 16                    # token_hex(8)
+    assert body["expires_at"] > time.time() + 6 * 86400
+    invite_id = body["invite_id"]
+
+    # В БД — только sha256, invite жив (accepted_at NULL).
+    conn = _db()
+    row = conn.execute(
+        "SELECT code_hash, accepted_at, role, invited_by FROM invites "
+        "WHERE id = ?", (invite_id,)).fetchone()
+    conn.close()
+    import hashlib
+    assert row is not None and row[0] == hashlib.sha256(
+        body["code"].encode()).hexdigest()
+    assert row[1] is None and row[2] == "member"
+    assert row[3] == owner["user"]["id"]
+    # Сам код в таблице не лежит.
+    conn = _db()
+    leak = conn.execute("SELECT COUNT(*) FROM invites WHERE code_hash = ?",
+                        (body["code"],)).fetchone()[0]
+    conn.close()
+    assert leak == 0
+
+    # Живое повторное приглашение того же email — 409.
+    r = client.post(f"/auth/orgs/{org_id}/members", json={"email": unknown},
+                    headers=_auth(owner["token"]))
+    assert r.status_code == 409
+
+    # Истёкшее приглашение можно пересоздать.
+    conn = _db()
+    conn.execute("UPDATE invites SET expires_at = ? WHERE id = ?",
+                 (time.time() - 10, invite_id))
+    conn.commit()
+    conn.close()
+    r = client.post(f"/auth/orgs/{org_id}/members", json={"email": unknown},
+                    headers=_auth(owner["token"]))
+    assert r.status_code == 201 and r.json()["status"] == "invited"
+
+
+def test_invite_forbidden_for_member_and_invalid_role():
+    owner = _register(_email("p-owner"), org_name="Типография-права")
+    org_id = owner["orgs"][0]["org_id"]
+    member = _register(_email("p-member"))
+
+    r = client.post(f"/auth/orgs/{org_id}/members",
+                    json={"email": member["user"]["email"]},
+                    headers=_auth(owner["token"]))
+    assert r.status_code == 201
+
+    # member не может приглашать.
+    r = client.post(f"/auth/orgs/{org_id}/members",
+                    json={"email": _email("p-target")},
+                    headers=_auth(member["token"]))
+    assert r.status_code == 403
+
+    # Невалидная роль — 422 (допустимы только member|viewer).
+    for bad in ("admin", "owner", "guest", ""):
+        r = client.post(f"/auth/orgs/{org_id}/members",
+                        json={"email": _email("p-bad"), "role": bad},
+                        headers=_auth(owner["token"]))
+        assert r.status_code == 422, (bad, r.text)
+
+
+def test_accept_invite_flow():
+    owner = _register(_email("c-owner"), org_name="Типография-приём")
+    org_id = owner["orgs"][0]["org_id"]
+    joiner = _register(_email("c-joiner"))
+
+    # Приглашение для уже существующего email можно только вручную (в API
+    # такой случай даёт «added») — вставляем строку, как делает регистрация.
+    import hashlib
+    known = "abcdef1234567890"
+    known_hash = hashlib.sha256(known.encode()).hexdigest()
+    now = time.time()
+    conn = _db()
+    conn.execute(
+        "INSERT INTO invites (id, org_id, email, role, code_hash, "
+        "invited_by, created_at, expires_at, accepted_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+        ("inv-c-1", org_id, joiner["user"]["email"], "viewer", known_hash,
+         owner["user"]["id"], now, now + 7 * 86400))
+    conn.commit()
+    conn.close()
+
+    # Неверный код — 404.
+    r = client.post(f"/auth/orgs/{org_id}/invites/accept",
+                    json={"code": "0" * 16}, headers=_auth(joiner["token"]))
+    assert r.status_code == 404
+
+    # Чужой email (сессия другого пользователя) — 403 с русским текстом.
+    outsider = _register(_email("c-outsider"))
+    r = client.post(f"/auth/orgs/{org_id}/invites/accept",
+                    json={"code": known}, headers=_auth(outsider["token"]))
+    assert r.status_code == 403
+    assert "другого email" in r.json()["detail"]
+
+    # Успех: membership + accepted_at.
+    r = client.post(f"/auth/orgs/{org_id}/invites/accept",
+                    json={"code": known}, headers=_auth(joiner["token"]))
+    assert r.status_code == 200, r.text
+    assert r.json() == {"ok": True, "org_id": org_id, "role": "viewer"}
+
+    members = client.get(f"/auth/orgs/{org_id}/members",
+                         headers=_auth(owner["token"])).json()["members"]
+    assert {m["user_id"]: m["role"] for m in members}[
+        joiner["user"]["id"]] == "viewer"
+
+    # Код одноразовый: повтор — 409.
+    r = client.post(f"/auth/orgs/{org_id}/invites/accept",
+                    json={"code": known}, headers=_auth(joiner["token"]))
+    assert r.status_code == 409
+
+    # Истёкшее приглашение — 409.
+    expired_user = _register(_email("c-exp-user"))
+    import hashlib as _hl
+    exp_code = "fedcba9876543210"
+    conn = _db()
+    conn.execute(
+        "INSERT INTO invites (id, org_id, email, role, code_hash, "
+        "invited_by, created_at, expires_at, accepted_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+        ("inv-c-exp", org_id, expired_user["user"]["email"], "member",
+         _hl.sha256(exp_code.encode()).hexdigest(), owner["user"]["id"],
+         now - 8 * 86400, now - 60))
+    conn.commit()
+    conn.close()
+    r = client.post(f"/auth/orgs/{org_id}/invites/accept",
+                    json={"code": exp_code},
+                    headers=_auth(expired_user["token"]))
+    assert r.status_code == 409
+    assert "истекло" in r.json()["detail"]
+
+
+def test_auto_accept_invites_on_register():
+    owner = _register(_email("reg-owner"), org_name="Типография-автоприём")
+    org_id = owner["orgs"][0]["org_id"]
+    future = _email("reg-future")
+
+    r = client.post(f"/auth/orgs/{org_id}/members",
+                    json={"email": future, "role": "viewer"},
+                    headers=_auth(owner["token"]))
+    assert r.status_code == 201 and r.json()["status"] == "invited"
+    invite_id = r.json()["invite_id"]
+
+    # Регистрация по invite-email: membership создаётся автоматически.
+    data = _register(future)
+    assert {"org_id": org_id, "role": "viewer"} in data["orgs"]
+
+    conn = _db()
+    row = conn.execute("SELECT accepted_at FROM invites WHERE id = ?",
+                       (invite_id,)).fetchone()
+    conn.close()
+    assert row[0] is not None and row[0] <= time.time()
+
+    members = client.get(f"/auth/orgs/{org_id}/members",
+                         headers=_auth(owner["token"])).json()["members"]
+    assert any(m["email"] == future and m["role"] == "viewer"
+               and m["invited_by"] == owner["user"]["id"]
+               for m in members)
+
+
+def test_delete_member_and_last_owner_409():
+    owner = _register(_email("d-owner"), org_name="Типография-удаление")
+    org_id = owner["orgs"][0]["org_id"]
+    member = _register(_email("d-member"))
+
+    r = client.post(f"/auth/orgs/{org_id}/members",
+                    json={"email": member["user"]["email"]},
+                    headers=_auth(owner["token"]))
+    assert r.status_code == 201
+
+    # member не может удалять.
+    r = client.delete(f"/auth/orgs/{org_id}/members/{owner['user']['id']}",
+                      headers=_auth(member["token"]))
+    assert r.status_code == 403
+
+    # Успех: участник удалён.
+    r = client.delete(f"/auth/orgs/{org_id}/members/{member['user']['id']}",
+                      headers=_auth(owner["token"]))
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    members = client.get(f"/auth/orgs/{org_id}/members",
+                         headers=_auth(owner["token"])).json()["members"]
+    assert [m["user_id"] for m in members] == [owner["user"]["id"]]
+
+    # Несуществующий участник — 404.
+    r = client.delete(f"/auth/orgs/{org_id}/members/deadbeefdeadbeef",
+                      headers=_auth(owner["token"]))
+    assert r.status_code == 404
+
+    # Последнего owner удалить нельзя — 409 (в т.ч. себя).
+    r = client.delete(f"/auth/orgs/{org_id}/members/{owner['user']['id']}",
+                      headers=_auth(owner["token"]))
+    assert r.status_code == 409
+
+    # Со вторым owner первый удаляем.
+    second = _register(_email("d-second"))
+    conn = _db()
+    conn.execute(
+        "INSERT INTO memberships (id, org_id, user_id, role, invited_by, "
+        "created_at) VALUES (?, ?, ?, 'owner', ?, ?)",
+        ("m-d-second", org_id, second["user"]["id"], owner["user"]["id"],
+         time.time()))
+    conn.commit()
+    conn.close()
+    r = client.delete(f"/auth/orgs/{org_id}/members/{owner['user']['id']}",
+                      headers=_auth(owner["token"]))
+    assert r.status_code == 200 and r.json() == {"ok": True}

@@ -38,6 +38,11 @@ API:
   POST /auth/verify            (Bearer) — внутренний вызов  → {sub, email, orgs}
   POST /auth/forgot            {email}                       → {ok: true}
   POST /auth/reset             {email, code, new_password}   → {ok: true}
+  GET  /auth/orgs/{id}/members (Bearer, член org)            → {members:[...]}
+  POST /auth/orgs/{id}/members (Bearer, owner/admin) {email, role?}
+                                                             → 201 added|invited
+  POST /auth/orgs/{id}/invites/accept (Bearer) {code}        → {ok, org_id, role}
+  DELETE /auth/orgs/{id}/members/{user_id} (Bearer, owner/admin) → {ok}
   GET  /healthz
 
 env:
@@ -81,6 +86,7 @@ TOKEN_TTL_S = int(TOKEN_TTL_H * 3600)
 RESET_TTL_MIN = float(os.environ.get("PP_RESET_TTL", "30").strip() or 30)
 RESET_TTL_S = int(RESET_TTL_MIN * 60)
 RESET_CODE_LEN = 6
+INVITE_TTL_S = 7 * 86400  # приглашения в организацию: 7 дней (F-19)
 # Регистрация без org_name: 1 — создаём личную организацию (по умолчанию),
 # 0 — пользователь без организации (memberships добавляются позже).
 DEFAULT_ORG = os.environ.get("PP_DEFAULT_ORG", "1").strip() != "0"
@@ -175,6 +181,19 @@ def _init_db():
             );
             CREATE INDEX IF NOT EXISTS idx_reset_codes_email
                 ON reset_codes(email);
+            CREATE TABLE IF NOT EXISTS invites (
+                id TEXT PRIMARY KEY,
+                org_id TEXT NOT NULL,
+                email TEXT NOT NULL,
+                role TEXT NOT NULL,
+                code_hash TEXT NOT NULL,
+                invited_by TEXT,
+                created_at REAL NOT NULL,
+                expires_at REAL NOT NULL,
+                accepted_at REAL
+            );
+            CREATE INDEX IF NOT EXISTS idx_invites_email
+                ON invites(email);
             """
         )
         # --- миграция legacy → новая схема (идемпотентно) ---
@@ -341,6 +360,27 @@ def _require_admin(conn, org_id: str, user_id: str) -> dict:
     return m
 
 
+def _apply_invites(conn, email: str, user_id: str) -> None:
+    """Автоприём живых приглашений по email (вызывается в транзакции регистрации).
+
+    Безопасно без подтверждения кода: email подтверждается паролем при
+    регистрации (F-19, HANDOFF §9 п.5).
+    """
+    now = time.time()
+    rows = conn.execute(
+        "SELECT id, org_id, role, invited_by FROM invites "
+        "WHERE email = ? AND accepted_at IS NULL AND expires_at > ?",
+        (email, now)).fetchall()
+    for r in rows:
+        conn.execute(
+            "INSERT INTO memberships (id, org_id, user_id, role, invited_by, "
+            "created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (secrets.token_hex(16), r["org_id"], user_id, r["role"],
+             r["invited_by"], now))
+        conn.execute("UPDATE invites SET accepted_at = ? WHERE id = ?",
+                     (now, r["id"]))
+
+
 # ---------- почта (сброс пароля) ----------
 
 def _smtp_config() -> Optional[dict]:
@@ -446,6 +486,15 @@ class ResetIn(BaseModel):
     new_password: str = Field(min_length=6, max_length=128)
 
 
+class MemberAddIn(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    role: str = Field(default="member", pattern="^(member|viewer)$")
+
+
+class InviteAcceptIn(BaseModel):
+    code: str = Field(min_length=1, max_length=64)
+
+
 def _user_row(row) -> dict:
     return {"id": row["id"], "email": row["email"],
             "created_at": row["created_at"]}
@@ -502,6 +551,8 @@ def register(body: RegisterIn):
             raise HTTPException(status_code=409,
                                 detail="Email уже зарегистрирован")
         user_id = _create_user(conn, email, body.password)
+        # Автоприём живых приглашений по email — в той же транзакции.
+        _apply_invites(conn, email, user_id)
         if org_name is None and DEFAULT_ORG:
             org_name = email
         if org_name is not None:
@@ -627,6 +678,151 @@ def create_org(body: OrgIn, user: dict = Depends(_auth_dep)):
     with _db_lock, _connect() as conn:
         org = _create_org(conn, name, user["sub"], "owner")
     return org
+
+
+# ---------- участники и приглашения (F-19, HANDOFF §9 п.5) ----------
+
+@app.get("/auth/orgs/{org_id}/members")
+def list_members(org_id: str, user: dict = Depends(_auth_dep)):
+    """Список участников организации: любой член (включая viewer)."""
+    with _db_lock, _connect() as conn:
+        if _member(conn, org_id, user["sub"]) is None:
+            raise HTTPException(status_code=403,
+                                detail="Нет доступа к организации")
+        rows = conn.execute(
+            "SELECT m.user_id, u.email, m.role, m.invited_by, m.created_at "
+            "FROM memberships m JOIN users u ON u.id = m.user_id "
+            "WHERE m.org_id = ? ORDER BY m.created_at ASC",
+            (org_id,)).fetchall()
+    return {"members": [{"user_id": r["user_id"], "email": r["email"],
+                         "role": r["role"], "invited_by": r["invited_by"],
+                         "created_at": r["created_at"]} for r in rows]}
+
+
+@app.post("/auth/orgs/{org_id}/members", status_code=201)
+def add_member(org_id: str, body: MemberAddIn,
+               user: dict = Depends(_auth_dep)):
+    """Добавить участника (существующий email) или создать приглашение.
+
+    role — только member|viewer (иное 422). Приглашение живёт 7 дней;
+    без SMTP код возвращается в ответе (dev-режим), с SMTP — уходит письмом.
+    """
+    email = body.email.lower().strip()
+    _check_email(email)
+    with _db_lock, _connect() as conn:
+        _require_admin(conn, org_id, user["sub"])
+        now = time.time()
+        target = conn.execute(
+            "SELECT id FROM users WHERE email = ?", (email,)).fetchone()
+        if target is not None:
+            if _member(conn, org_id, target["id"]) is not None:
+                raise HTTPException(status_code=409,
+                                    detail="Пользователь уже участник организации")
+            conn.execute(
+                "INSERT INTO memberships (id, org_id, user_id, role, "
+                "invited_by, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (secrets.token_hex(16), org_id, target["id"], body.role,
+                 user["sub"], now))
+            row = conn.execute(
+                "SELECT m.user_id, u.email, m.role, m.invited_by, "
+                "m.created_at FROM memberships m "
+                "JOIN users u ON u.id = m.user_id "
+                "WHERE m.org_id = ? AND m.user_id = ?",
+                (org_id, target["id"])).fetchone()
+            return {"status": "added",
+                    "member": {"user_id": row["user_id"], "email": row["email"],
+                               "role": row["role"], "invited_by": row["invited_by"],
+                               "created_at": row["created_at"]}}
+
+        live = conn.execute(
+            "SELECT id FROM invites WHERE org_id = ? AND email = ? "
+            "AND accepted_at IS NULL AND expires_at > ?",
+            (org_id, email, now)).fetchone()
+        if live is not None:
+            raise HTTPException(status_code=409,
+                                detail="Приглашение для этого email уже отправлено")
+        code = secrets.token_hex(8)  # 16 hex-символов
+        invite_id = secrets.token_hex(16)
+        expires_at = now + INVITE_TTL_S
+        conn.execute(
+            "INSERT INTO invites (id, org_id, email, role, code_hash, "
+            "invited_by, created_at, expires_at, accepted_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+            (invite_id, org_id, email, body.role, _sha256(code),
+             user["sub"], now, expires_at))
+    smtp = _smtp_config()
+    smtp_sent = False
+    if smtp is not None:
+        try:
+            _send_email(
+                email,
+                "Приглашение в организацию — Препресс-Планер",
+                f"Вас приглашают в организацию (роль: {body.role}).\n"
+                f"Код приглашения: {code}\n"
+                f"Код действителен 7 дней.")
+            smtp_sent = True
+        except Exception:
+            # Сбой SMTP не ломает приглашение: код остаётся в БД (hash).
+            smtp_sent = False
+    resp = {"status": "invited", "invite_id": invite_id,
+            "expires_at": expires_at, "smtp_sent": smtp_sent}
+    if not smtp_sent and smtp is None:
+        resp["code"] = code  # dev-режим без SMTP — код в ответе
+    return resp
+
+
+@app.post("/auth/orgs/{org_id}/invites/accept")
+def accept_invite(org_id: str, body: InviteAcceptIn,
+                  user: dict = Depends(_auth_dep)):
+    """Принятие приглашения по коду: email сессии должен совпадать с invite."""
+    with _db_lock, _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM invites WHERE org_id = ? AND code_hash = ?",
+            (org_id, _sha256(body.code.strip()))).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Приглашение не найдено")
+        if row["email"] != user["email"].lower():
+            raise HTTPException(status_code=403,
+                                detail="Приглашение предназначено для другого email")
+        if row["accepted_at"] is not None:
+            raise HTTPException(status_code=409, detail="Приглашение уже принято")
+        if row["expires_at"] < time.time():
+            raise HTTPException(status_code=409, detail="Приглашение истекло")
+        if _member(conn, org_id, user["sub"]) is not None:
+            raise HTTPException(status_code=409,
+                                detail="Вы уже участник организации")
+        now = time.time()
+        conn.execute(
+            "INSERT INTO memberships (id, org_id, user_id, role, invited_by, "
+            "created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (secrets.token_hex(16), org_id, user["sub"], row["role"],
+             row["invited_by"], now))
+        conn.execute("UPDATE invites SET accepted_at = ? WHERE id = ?",
+                     (now, row["id"]))
+    return {"ok": True, "org_id": org_id, "role": row["role"]}
+
+
+@app.delete("/auth/orgs/{org_id}/members/{user_id}")
+def remove_member(org_id: str, user_id: str,
+                  user: dict = Depends(_auth_dep)):
+    """Удаление участника; последнего owner удалить нельзя (409)."""
+    with _db_lock, _connect() as conn:
+        _require_admin(conn, org_id, user["sub"])
+        target = _member(conn, org_id, user_id)
+        if target is None:
+            raise HTTPException(status_code=404, detail="Участник не найден")
+        if target["role"] == "owner":
+            owners = conn.execute(
+                "SELECT COUNT(*) AS n FROM memberships "
+                "WHERE org_id = ? AND role = 'owner'", (org_id,)).fetchone()
+            if owners["n"] <= 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Нельзя удалить последнего owner организации")
+        conn.execute(
+            "DELETE FROM memberships WHERE org_id = ? AND user_id = ?",
+            (org_id, user_id))
+    return {"ok": True}
 
 
 @app.post("/auth/verify")

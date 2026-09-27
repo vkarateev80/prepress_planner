@@ -59,3 +59,7 @@ Thumbs.db
 # TLS-ключи (см. deploy/nginx/gen_dev_certs.sh; прод — certbot)
 deploy/nginx/certs/
 deploy/backups/
+.env
+!.env.example
+deploy/acme/
+deploy/certbot/

@@ -214,7 +214,8 @@ def checkout(body: CheckoutIn, caller: Dict[str, Any] = Depends(auth_dep),
     order = STORE.create_order(org_id, str(caller.get("sub")), plan["plan"])
     try:
         payment = provider.create_payment(order, plan,
-                                          config.return_url_for(order["id"]))
+                                          config.return_url_for(order["id"]),
+                                          customer_email=caller.get("email"))
     except ProviderNotConfigured as exc:
         STORE.fail_order(order["id"])
         log_event("checkout_unavailable", order_id=order["id"], org_id=org_id,

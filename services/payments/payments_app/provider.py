@@ -171,7 +171,8 @@ class PaymentProvider:
 
     # -- checkout ---------------------------------------------------------
     def create_payment(self, order: Dict[str, Any], plan: Dict[str, Any],
-                       return_url: str = "") -> Dict[str, Any]:
+                       return_url: str = "",
+                       customer_email: Optional[str] = None) -> Dict[str, Any]:
         """Создать платёж у провайдера → {provider_payment_id, confirmation_url}."""
         raise NotImplementedError
 
@@ -271,7 +272,8 @@ class YooKassaProvider(PaymentProvider):
 
     # -- checkout ---------------------------------------------------------
     def create_payment(self, order: Dict[str, Any], plan: Dict[str, Any],
-                       return_url: str = "") -> Dict[str, Any]:
+                       return_url: str = "",
+                       customer_email: Optional[str] = None) -> Dict[str, Any]:
         amount = {"value": f"{int(order['amount_rub'])}.00",
                   "currency": plan.get("currency") or "RUB"}
         confirmation: Dict[str, Any] = {"type": "redirect"}
@@ -292,6 +294,24 @@ class YooKassaProvider(PaymentProvider):
         if self.save_payment_method:
             # Автоплатежи ЮKassa включаются только после активации у мерчанта.
             payload["save_payment_method"] = True
+        if config.RECEIPT_ENABLED:
+            # Чек — объект внутри тела создания платежа (ЮKassa API v3, ADR-3).
+            receipt: Dict[str, Any] = {
+                "items": [{
+                    "description": (f"Подписка {plan.get('title') or plan.get('plan')} "
+                                    "— Препресс-Планер")[:128],
+                    "quantity": "1",
+                    "amount": {"value": f"{int(order['amount_rub']):.2f}",
+                               "currency": amount["currency"]},
+                    "vat_code": int(config.RECEIPT_VAT_CODE),
+                    "payment_subject": "service",
+                    "payment_mode": "full_payment",
+                }],
+            }
+            email = (customer_email or "").strip()
+            if email:
+                receipt["customer"] = {"email": email}
+            payload["receipt"] = receipt
         data = self._request("POST", "/payments", payload,
                              idempotence_key=order["id"])
         payment_id = str(data.get("id") or "")
@@ -377,7 +397,8 @@ class UnconfiguredProvider(PaymentProvider):
                 "YUKASSA_SECRET_KEY (секреты — только через env/секрет-менеджер)")
 
     def create_payment(self, order: Dict[str, Any], plan: Dict[str, Any],
-                       return_url: str = "") -> Dict[str, Any]:
+                       return_url: str = "",
+                       customer_email: Optional[str] = None) -> Dict[str, Any]:
         raise ProviderNotConfigured(self._MESSAGE)
 
     def refund(self, payment_id: str, amount_rub: int, order_id: str = "",

@@ -95,14 +95,16 @@ class FakeYooKassa(PaymentProvider):
         self.fail_create = False
 
     def create_payment(self, order: Dict[str, Any], plan: Dict[str, Any],
-                       return_url: str = "") -> Dict[str, Any]:
+                       return_url: str = "",
+                       customer_email: Optional[str] = None) -> Dict[str, Any]:
         if self.fail_create:
             from payments_app.provider import ProviderError
             raise ProviderError("ЮKassa недоступна: тестовый сбой")
         payment_id = f"pay-{order['id']}"
         self.created.append({"order_id": order["id"], "plan": plan["plan"],
                              "amount_rub": order["amount_rub"],
-                             "return_url": return_url})
+                             "return_url": return_url,
+                             "customer_email": customer_email})
         return {"provider_payment_id": payment_id, "provider_order_id": payment_id,
                 "status": "pending",
                 "confirmation_url": f"https://yookassa.test/confirm/{payment_id}"}
@@ -289,6 +291,13 @@ def test_checkout_creates_order_and_confirmation_url(fake_provider):
     assert view["status_alias"] == "pending"
     assert view["confirmation_url"] == order["confirmation_url"]
     assert "provider_order_id" not in view  # внутренние id не отдаём
+
+
+def test_checkout_passes_session_email_to_provider(fake_provider):
+    """Email из сессии (auth /auth/verify) уходит в create_payment для чека."""
+    order = checkout("t:org-receipt-mail:owner")
+    assert order["status"] == "pending"
+    assert fake_provider.created[-1]["customer_email"] == "org-receipt-mail@example.com"
 
 
 def test_checkout_bad_plan(fake_provider):

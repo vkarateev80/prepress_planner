@@ -194,13 +194,24 @@ Git на Windows: при «dubious ownership» добавлять `-c safe.direc
 `nginx -t`, тесты на PostgreSQL 16, `deploy/backup.sh`, миграция образов MinIO,
 CI — 5 джоб). Подробности — §12 и `docs/VERIFICATION.md` §8.
 
-Остаётся:
+Статус пунктов (актуально на 2026-09-27; детали — `docs/VERIFICATION.md`
+§9–§10, `deploy/DEPLOY_CHECKLIST.md`):
 
-1. **Прод-TLS**: certbot для реального домена (`deploy/nginx/certs/` в .gitignore,
-   dev-сертификат — `bash deploy/nginx/gen_dev_certs.sh`).
-2. **Ключи ЮKassa** + регистрация webhook-URL; SMTP (`PP_SMTP_*`) для сброса паролей.
-3. **Offsite-копия** `deploy/backups/` (сегодня бэкапы локальные; в прод — cron
-   `bash deploy/backup.sh` + вынос на внешнее хранилище).
+1. **Прод-TLS**: скрипт готов — `bash deploy/nginx/get_prod_certs.sh`
+   (webroot-HTTP-01: ACME-location в `pp-web-tls.conf` до редиректа,
+   certbot в docker, состояние `deploy/certbot/`; самопроверка DNS/порта 80).
+   Остаётся внешнее: домен с DNS на сервер → запуск скрипта (чек-лист §2).
+2. **Ключи ЮKassa** (shop_id/secret/webhook-secret + регистрация webhook-URL)
+   и **SMTP** (`PP_SMTP_*`) — только внешние действия в кабинетах; код и
+   шаблоны готовы (`.env.example`, DEPLOY_CHECKLIST «Внешние действия без
+   кода», receipt/автоплатежи — п.6).
+3. ~~**Offsite-копия**~~ — **СДЕЛАНО** (2026-09-27): шаг 3/3 в
+   `deploy/backup.sh` по `PP_OFFSITE_*` (любой S3-совместимый провайдер),
+   cron и примеры — `deploy/README.md`/`.env.example`. Пойман и исправлен
+   баг: `docker compose run minio-init` исполнял compose-entrypoint
+   (health-скрипт) вместо команды sync — **бэкап bucket молча не делался**;
+   теперь `--entrypoint /bin/sh`, живой прогон 3/3 шагов с подтверждением
+   `s3 ls`. Остаётся внешнее: bucket/ключи у провайдера + включить cron.
 4. ~~**Живой UI-прогон web-сборки** (импорт файла → расчёт → PDF)~~ —
    **ЗАКРЫТ** 2026-09-26 (сессия продолжения): сценарий целиком через UI,
    эталон 1:1; найдены и исправлены два прод-бага — `AuthApi` не принимал
@@ -208,11 +219,18 @@ CI — 5 джоб). Подробности — §12 и `docs/VERIFICATION.md` §
    ждал `ByteBuffer` вместо приходящего на web `Uint8List` (веб-импорт молча
    не работал). Подробности и доказательства — `docs/VERIFICATION.md` §9;
    стек/скрипты прогона — `~/.pp_live/` (start.sh, stage*.js).
-5. **Приглашения участников** (`POST /auth/orgs/{id}/members`) — F-19, не блокер.
-6. Чеки/автоплатежи ЮKassa (ADR-3), ретеншен bucket (в ILM-правилах MinIO-сборки
-   `AbortIncompleteMultipartUpload` молча отбрасывается — проверено), `nginx -t`
-   уже в CI.
-7. iOS IAP (StoreKit) — нужны macOS/Xcode + аккаунт разработчика.
+5. ~~**Приглашения участников** (F-19)~~ — **ГОТОВО** (2026-09-27):
+   `GET/POST /auth/orgs/{id}/members`, `POST …/invites/accept`,
+   `DELETE …/members/{user_id}`; таблица `invites` (TTL 7 дней, sha256),
+   автоприём при регистрации, SMTP или dev-код, защита последнего owner;
+   auth-тесты 26 passed (см. VERIFICATION §10.1).
+6. ~~Чеки/автоплатежи ЮKassa (ADR-3)~~ — **ГОТОВО** (2026-09-27):
+   `receipt` в checkout (`YUKASSA_RECEIPT_ENABLED`/`YUKASSA_RECEIPT_VAT_CODE`,
+   email из сессии), `save_payment_method` покрыт тестом; платежей 51 passed.
+   Ретеншен bucket и `nginx -t` в CI — уже были сделаны ранее.
+7. iOS IAP (StoreKit) — **блокер**: нужны macOS/Xcode + аккаунт Apple
+   Developer; что именно и что уже готово в коде — DEPLOY_CHECKLIST
+   «Внешние действия без кода».
 
 ## 10. Ключевые документы
 
@@ -393,3 +411,50 @@ routed session`, синтетические клики нестабильны (�
 
 **Остаётся из §9:** прод-TLS (certbot), ключи ЮKassa+webhook+SMTP,
 offsite-бэкапы, приглашения F-19, чеки/автоплатежи ADR-3, iOS IAP.
+
+---
+
+## 14. Сеанс-продолжение 2026-09-27: закрытие §9 (п.1–3, 5–7)
+
+**Сделано (подробности — `docs/VERIFICATION.md` §10):**
+
+- **F-19 приглашения** (`services/auth`): 4 роута (список/добавление/
+  accept/удаление), таблица `invites` (TTL 7 дней, sha256-код), автоприём
+  приглашений при регистрации (в той же транзакции), SMTP-письмо или dev-код
+  без SMTP, защита последнего owner, роли только `member`/`viewer`.
+  Тесты: auth 26 passed (+7). README auth обновлён.
+- **ADR-3 чеки** (`services/payments`): объект `receipt` в создании платежа
+  (customer.email из principal, items/service/full_payment,
+  `YUKASSA_RECEIPT_ENABLED`, `YUKASSA_RECEIPT_VAT_CODE`); сквозной тест
+  «email из сессии → payload»; `save_payment_method` закрыт тестом.
+  Тесты: payments 51 passed (+7). README + `.env.example`.
+- **Offsite-бэкапы** (`deploy/backup.sh`): шаг 3/3 — вынос на внешний
+  S3-совместимый бэкет по `PP_OFFSITE_*`; cron/примеры в README и
+  `.env.example`. **Пойман баг**: `docker compose run minio-init`
+  исполнял compose-entrypoint (health-скрипт) вместо команды sync — шаги
+  бэкапа bucket молча ничего не делали; фикс — `--entrypoint /bin/sh`
+  (в обеих шагах). Живой прогон: pg_dump + download + offsite upload,
+  `s3 ls` подтверждён; убрана вложенность `bucket/bucket`.
+- **Прод-TLS** (`deploy/nginx/get_prod_certs.sh` + ACME-location в
+  `pp-web-tls.conf` + mount `deploy/acme/`): webroot-HTTP-01, certbot в
+  docker (`deploy/certbot/`, в `.gitignore`), установка в `nginx/certs/` +
+  reload, самопроверка DNS/порта до запроса. Проверено: `nginx -t`,
+  живая отдача челленджа и 301, guard-путь на фейковом домене.
+  Выпуск — требует домен (внешнее действие).
+- **Внешние действия** сведены в `DEPLOY_CHECKLIST.md` («Внешние действия
+  без кода»): домен/DNS, ключи ЮKassa+webhook, SMTP, offsite-бэкет, и
+  **блокер iOS IAP** (Xcode + Apple Developer Program + App Store Connect;
+  paywall/entitlement в коде уже готовы).
+
+**Прогоны (зелёные):** pytest все сервисы — **157 passed, 1 skipped**
+(было 143: +7 F-19, +7 receipt); `docker compose config`; `nginx -t`
+для конфига с ACME; `bash -n` обоих скриптов. Flutter не менялся —
+анализ/тесты предыдущего сеанса (0 / 51/51) актуальны.
+
+**Изменения в дереве (не закоммичены):** services/auth (2 файла),
+services/payments (7), deploy (backup.sh, get_prod_certs.sh, pp-web-tls.conf,
+docker-compose.yml, README, DEPLOY_CHECKLIST, .env.example), .gitignore,
+services/auth/README.md, docs/VERIFICATION.md (§10), docs/HANDOFF.md (§9, §14).
+
+**Осталось (только внешнее):** домен → get_prod_certs.sh; ключи
+ЮKassa/webhook; SMTP; offsite-бэкет + cron; Apple-аккаунт → iOS IAP.

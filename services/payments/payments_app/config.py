@@ -17,6 +17,10 @@ env:
   YUKASSA_API_URL          — базовый URL API (по умолчанию https://api.yookassa.ru/v3)
   YUKASSA_SAVE_PAYMENT_METHOD — 1 = просить ЮKassa сохранить способ оплаты
                              (автоплатежи; нужна активация у мерчанта)
+  YUKASSA_RECEIPT_ENABLED     — 0 = не добавлять объект receipt (чек) в создание
+                             платежа (по умолчанию 1)
+  YUKASSA_RECEIPT_VAT_CODE    — код НДС в чеке (по умолчанию "1" — НДС включён
+                             в цену; строка, как у ЮKassa)
   PP_PUBLIC_BASE           — публичный origin для return_url (ADR-6, 443)
   PP_RETURN_PATH           — путь возврата после оплаты (по умолчанию /billing/return)
   PP_TRIAL_DAYS            — срок триала в днях (по умолчанию 15, вне провайдера)
@@ -70,6 +74,11 @@ YUKASSA_API_URL = (_env("YUKASSA_API_URL", "https://api.yookassa.ru/v3") or
 # Автоплатежи (save_payment_method) включаются у ЮKassa только после активации
 # рекуррента у мерчанта — по умолчанию выключены.
 SAVE_PAYMENT_METHOD = _env("YUKASSA_SAVE_PAYMENT_METHOD").lower() in ("1", "true", "yes")
+
+# Чек (ADR-3): объект receipt в создании платежа. Выключение (0) убирает поле
+# из payload — для контуров без фискализации; НДС по умолчанию включён в цену.
+RECEIPT_ENABLED = _env("YUKASSA_RECEIPT_ENABLED", "1").lower() in ("1", "true", "yes")
+RECEIPT_VAT_CODE = _env("YUKASSA_RECEIPT_VAT_CODE", "1") or "1"
 
 # ЮKassa включена только когда заданы оба ключа; иначе checkout/refund → 503
 # (никаких «тестовых подтверждений» на стороне сервиса — см. ADR-3).

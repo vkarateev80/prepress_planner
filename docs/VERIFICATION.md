@@ -225,3 +225,35 @@ edge-nginx `:8080` (статика `app/build/web`, прокси → `host.docke
 
 **Вердикт: HANDOFF §9 п.4 ЗАКРЫТ** — чек-лист «импорт → расчёт → PDF»
 выполнен автоматически и повторяемо.
+
+---
+
+## 10. Закрытие остальных пунктов HANDOFF §9 (2026-09-27)
+
+После живого прогона (§9) доработаны оставшиеся направления. Всё, что
+выполнимо без внешних аккаунтов/ключей, сделано и проверено; внешние
+действия сведены в `deploy/DEPLOY_CHECKLIST.md` («Внешние действия без
+кода»).
+
+### 10.1 Что сделано (пункты §9)
+
+| Пункт §9 | Статус | Содержание |
+|---|---|---|
+| 1. Прод-TLS | **скрипт готов** (нужен домен) | `deploy/nginx/get_prod_certs.sh`: webroot-HTTP-01 через edge-nginx (ACME-location в `pp-web-tls.conf` **до** редиректа, mount `deploy/acme/`), certbot в docker (состояние `deploy/certbot/`, в `.gitignore`), установка в `nginx/certs/` + reload; самопроверка DNS/порта 80 до запроса. Проверено: `bash -n`, `nginx -t`, отдача `/.well-known/acme-challenge/*` и 301 остальных путей (живой контейнер), guard-путь скрипта на фейковом домене (падает с русской подсказкой ДО certbot). Выпуск реального сертификата требует домена на сервере. |
+| 2. ЮKassa/SMTP | **код и чек-листы готовы** (нужны ключи) | `YUKASSA_WEBHOOK_SECRET`/`SHOP_ID`/`SECRET_KEY` + регистрация webhook — п.6 чек-листа; SMTP `PP_SMTP_*` — п.1 и `deploy/README.md` (там же — как SMTP влияет на приглашения F-19). |
+| 3. Offsite-бэкапы | **готово и проверено живьём** | `deploy/backup.sh`: шаг 3/3 — `aws s3 sync` на внешний S3 (`PP_OFFSITE_*`, любые S3-совместимые провайдеры), инкрементально, метка `<prefix>/<stamp>/`; cron-строка и таблица env — в шапке скрипта и `deploy/README.md`, `.env.example`. **Пойман и исправлен баг**: вызовы `minio-init` игнорировались compose-entrypoint (health-скрипт) — шаг sync молча не выполнялся; теперь `--entrypoint /bin/sh`. Живой прогон: pg_dump + реальный download из bucket + upload offsite (3 файла, `s3 ls` подтверждён), убрана вложенность `bucket/bucket`. |
+| 4. Живой UI-прогон | **закрыт ранее** (§9) | — |
+| 5. Приглашения F-19 | **готово** | `services/auth`: `GET/POST /auth/orgs/{id}/members`, `POST …/invites/accept`, `DELETE …/members/{user_id}`; таблица `invites` (TTL 7 дней, sha256-код), автоприём при регистрации, SMTP-письмо или dev-код без SMTP, защита последнего owner, роли только `member`/`viewer`. Тесты: auth **26 passed** (+7). README auth обновлён. |
+| 6. Чеки/автоплатежи ADR-3 | **готово** | `receipt` в `create_payment` (ЮKassa v3: customer.email из сессии, items/service/full_payment, `YUKASSA_RECEIPT_ENABLED`/`YUKASSA_RECEIPT_VAT_CODE`), прокидывание email из `/payments/checkout`; `save_payment_method` был в коде — закрыт тестом. Тесты payments **51 passed** (+7), в т.ч. сквозной «email из сессии → payload». Ретеншен bucket и `nginx -t` в CI — уже были (§8). |
+| 7. iOS IAP | **блокер задокументирован** | `deploy/DEPLOY_CHECKLIST.md` §«Внешние действия без кода»: что нужно (Xcode, Apple Developer Program, App Store Connect, product_id, sandbox) и что уже готово в коде (paywall/entitlement). Без аккаунта Apple не начинается. |
+
+### 10.2 Прогоны после доработок (все зелёные)
+
+- `pytest services/{converter,auth,payments,api,license}/tests` —
+  **157 passed, 1 skipped** (было 143: +7 F-19, +7 receipt).
+- `docker compose config` (deploy) — OK; `nginx -t` для изменённого
+  `pp-web-tls.conf` (с ACME-location) — OK.
+- `deploy/backup.sh` — живой прогон на поднятом `postgresql`+`minio`:
+  3/3 шага, offsite-загрузка подтверждена `s3 ls`.
+- Приложения (Flutter) не изменялись — предыдущие прогоны (analyze 0,
+  51/51, build web) актуальны.

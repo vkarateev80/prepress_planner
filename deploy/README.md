@@ -20,7 +20,10 @@
 (Let's Encrypt/certbot в проде) — иначе nginx не поднимется. Для стенда/проверки
 конфига есть `bash deploy/nginx/gen_dev_certs.sh` — генерирует самоподписанный
 сертификат на 365 дней (CN=localhost; каталог `certs/` в `.gitignore`, ключи
-в git не попадают).
+в git не попадают). **Прод (HANDOFF §9 п.1)** — `bash deploy/nginx/get_prod_certs.sh`:
+webroot-HTTP-01 через edge-nginx (`location /.well-known/acme-challenge/`,
+каталог `deploy/acme/`), certbot в docker (состояние `deploy/certbot/`), установка
+в `nginx/certs/` + `nginx -s reload`; перед запросом — самопроверка DNS/порта 80.
 
 ## Содержимое
 - `docker-compose.yml` — полный стек (postgresql, minio, api, auth, billing,
@@ -68,6 +71,35 @@ cd deploy && bash backup.sh            # → ./backups/db_<метка>.sql.gz + 
 `minio-init` (каталог `backups/` в `.gitignore`). Каталоги томов см.
 «Перенос данных» ниже. Восстановление — в шапке скрипта.
 
+**Offsite-вынос (HANDOFF §9 п.3)** — третий шаг скрипта, включается
+переменными окружения (в `.env` или в строке cron); без
+`PP_OFFSITE_S3_BUCKET` пропускается:
+
+```bash
+PP_OFFSITE_S3_BUCKET=backups-pp            # обязателен
+PP_OFFSITE_S3_ENDPOINT=https://s3.eu-central.io.cloud.ru  # пусто → AWS S3
+PP_OFFSITE_S3_REGION=ru-1                  # по умолчанию us-east-1
+PP_OFFSITE_S3_PREFIX=prepress-backups      # по умолчанию
+PP_OFFSITE_ACCESS_KEY_ID=…                 # обязателен
+PP_OFFSITE_SECRET_ACCESS_KEY=…             # обязателен
+bash backup.sh
+```
+
+Копия уходит инкрементально (`aws s3 sync`) ключами
+`s3://<bucket>/<prefix>/<метка>/…`; старые метки на стороннем хранилище
+не удаляются — чистите их средствами провайдера (lifecycle). Любой
+S3-совместимый провайдер (Яндекс Object Storage, Wasabi, Backblaze B2, Ceph).
+Крон (ежедневно в 04:00):
+
+```cron
+0 4 * * * cd /opt/stack/deploy && bash backup.sh >> /var/log/pp-backup.log 2>&1
+```
+
+> Важно: вызовы `minio-init` в скрипте идут с `--entrypoint /bin/sh` —
+> compose-entrypoint сервиса (health-скрипт) игнорирует переданную команду;
+> без флага шаги sync молча не выполняются (проверено живым прогоном
+> 2026-09-27).
+
 **Образ MinIO:** официальный `minio/minio` удалён с Docker Hub (MinIO
 заархивировала community-издание: удаление образов с Oct 2025, репозиторий
 заархивирован 13.02.2026; см. milvus-io/milvus#53430). Стек использует
@@ -90,7 +122,9 @@ Docker root-овые). ILM-правило `AbortIncompleteMultipartUpload` эт�
 Настройка SMTP (`PP_SMTP_*` в `.env`) для прода **обязательна**: код сброса
 пароля отправляется только по почте и никогда не возвращается в ответе
 `/auth/forgot`. Без SMTP код создаётся в БД, но письмо не уходит (в логах —
-ошибка доставки); для локальных проверок используйте SMTP-заглушку
+ошибка доставки); приглашения участников (`POST /auth/orgs/{id}/members`,
+F-19) без SMTP возвращают код в ответе (dev-режим) — в проде с SMTP код
+уходит письмом. Для локальных проверок используйте SMTP-заглушку
 (например, MailHog). База auth обновляется автоматически при старте и
 **сохраняет данные** (миграция legacy → организации/роли, см.
 `services/auth/README.md`); перед обновлением прода сделайте копию тома
