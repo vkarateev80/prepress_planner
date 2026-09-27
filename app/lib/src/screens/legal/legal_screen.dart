@@ -28,18 +28,12 @@ class _LegalScreenState extends State<LegalScreen> {
   static const _requisitesSubtitle =
       'Сведения для заключения договора и оплаты услуг.';
 
-  static const _requisitesOrg = 'ООО «Препресс-Технологии»';
-  static const _requisitesInn = '770712345678';
-  static const _requisitesKpp = '770712345';
-  static const _requisitesOgrn = '1157746123456';
-  static const _requisitesAddr = 'г. Москва, ул. Примерная, д. 1, оф. 101';
-  static const _requisitesLegalAddr = '123456, г. Москва, ул. Ленина, д. 1';
-  static const _requisitesBankName = 'АО «СберБанк»';
-  static const _requisitesBIK = '044525225';
-  static const _requisitesKBK = '182501001';
-  static const _requisitesKGS = '77510001001';
-  static const _requisitesAccount = '40817810000001234567';
-  static const _requisitesCorrespAccount = '30101810000000000000';
+  static const _requisitesOrg = 'ИП Каратеева И. О.';
+  static const _requisitesInn = '332905240930';
+  static const _requisitesOgrn = '326330000052193'; // ОГРНИП
+  static const _requisitesPhone = '+7 993 600-19-80';
+  static const _requisitesEmail = 'info@prepressplan.ru';
+  static const _requisitesSite = 'prepressplan.ru';
 
   static const _privacyTitle = 'Политика конфиденциальности';
   static const _privacySubtitle =
@@ -88,7 +82,7 @@ class _LegalScreenState extends State<LegalScreen> {
     'Настоящая политика может быть изменена. Актуальная редакция всегда '
         'доступна на данном объекте сайта.',
     'По вопросам обработки персональных данных:\nEmail: mail@prepressplan.ru\n'
-        'Телефон: +7 (495) 000-00-00',
+        'Телефон: +7 993 600-19-80',
   ];
 
   static const _termsTitle = 'Пользовательское соглашение';
@@ -155,8 +149,7 @@ class _LegalScreenState extends State<LegalScreen> {
   ];
 
   static const _dataProtectionTexts = [
-    'ООО «Препресс-Технологии»\nИНН: 770712345678\nАдрес: г. Москва, '
-        'ул. Примерная, д. 1',
+    'ИП Каратеева И. О.\nИНН: 332905240930\nОГРНИП: 326330000052193',
     'Идентификация личности\nПредоставление доступа к сервису\nОплата услуг '
         'и выставление счетов\nСтатистический анализ',
     'Фамилия, имя, отчество\nEmail\nКонтактный телефон\nIP-адрес и данные об '
@@ -165,7 +158,7 @@ class _LegalScreenState extends State<LegalScreen> {
         'аккаунта данные удаляются в течение 30 дней.',
     'Пользователь вправе:\nПолучить информацию о своих данных\nИсправить '
         'неточные данные\nЗапросить удаление данных\nОтозвать согласие',
-    'Email: dpo@prepressplan.ru\nАдрес: г. Москва, ул. Примерная, д. 1',
+    'Email: dpo@prepressplan.ru\nТелефон: +7 993 600-19-80',
   ];
 
   static const _licenseTitle = 'Лицензионное соглашение';
@@ -201,7 +194,7 @@ class _LegalScreenState extends State<LegalScreen> {
     'Сервис оставляет за собой право изменять условия настоящего соглашения. '
         'Об изменениях пользователь уведомляется заранее.',
     'По вопросам лицензирования:\nEmail: support@prepressplan.ru\nТелефон: '
-        '+7 (495) 000-00-00',
+        '+7 993 600-19-80',
   ];
 
   @override
@@ -309,22 +302,13 @@ class _LegalScreenState extends State<LegalScreen> {
                 const Divider(height: 1),
                 _buildInfoRow(context, 'ИНН', _requisitesInn),
                 const Divider(height: 1),
-                _buildInfoRow(context, 'КПП', _requisitesKpp),
+                _buildInfoRow(context, 'ОГРНИП', _requisitesOgrn),
                 const Divider(height: 1),
-                _buildInfoRow(context, 'ОГРН', _requisitesOgrn),
+                _buildInfoRow(context, 'Телефон', _requisitesPhone),
                 const Divider(height: 1),
-                _buildInfoRow(context, 'Адрес', _requisitesAddr),
+                _buildInfoRow(context, 'Email', _requisitesEmail),
                 const Divider(height: 1),
-                _buildInfoRow(
-                    context, 'Юридический адрес', _requisitesLegalAddr),
-                const Divider(height: 1),
-                _buildInfoRow(context, 'Банк', _requisitesBankName),
-                const Divider(height: 1),
-                _buildInfoRow(context, 'БИК', _requisitesBIK),
-                const Divider(height: 1),
-                _buildInfoRow(context, 'КБК', _requisitesKBK),
-                const Divider(height: 1),
-                _buildInfoRow(context, 'КОСГС', _requisitesKGS),
+                _buildInfoRow(context, 'Сайт', _requisitesSite),
               ],
             ),
           ),
@@ -337,43 +321,25 @@ class _LegalScreenState extends State<LegalScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Реквизиты для оплаты',
+                  'Оплата',
                   style: theme.textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.w600,
                   ),
                 ),
                 const SizedBox(height: 12),
-                _buildInfoRow(
-                    context, 'Рассчётный счёт', _requisitesAccount),
-                const Divider(height: 1),
-                _buildInfoRow(context, 'Корр. счёт', _requisitesCorrespAccount),
-                const Divider(height: 1),
-                _buildInfoRow(context, 'Банк', _requisitesBankName),
-                const Divider(height: 1),
-                _buildInfoRow(context, 'БИК', _requisitesBIK),
-                const Divider(height: 1),
-                _buildInfoRow(context, 'КБК', _requisitesKBK),
-                const Divider(height: 1),
-                _buildInfoRow(context, 'КОСГС', _requisitesKGS),
+                Text(
+                  'Подписка Pro оплачивается банковской картой онлайн через '
+                  'платёжную систему ЮKassa в разделе аккаунта. Электронный '
+                  'чек приходит на email после подтверждения платежа. '
+                  'Порядок оплаты и получения — на странице тарифов '
+                  'prepressplan.ru/legal/pricing.html.',
+                  style: theme.textTheme.bodyMedium,
+                ),
               ],
             ),
           ),
         ),
         const SizedBox(height: 16),
-        Text(
-          'Для оплаты услуг используйте реквизиты выше. При оплате укажите в '
-              'поле «Пометка», номера договора по системе «Препресс-Планер» или '
-              'идентификатор организации.',
-          style: theme.textTheme.bodySmall,
-        ),
-        const SizedBox(height: 8),
-        TextButton.icon(
-          onPressed: () {
-            // Открыть страницу оплаты в браузере
-          },
-          icon: const Icon(Icons.open_in_new),
-          label: const Text('Перейти к оплате'),
-        ),
       ],
     );
   }
