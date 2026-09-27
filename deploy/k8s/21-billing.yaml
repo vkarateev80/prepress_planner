@@ -80,9 +80,9 @@ spec:
             - name: PP_TRIAL_DAYS
               value: "15"
             - name: PP_PRO_MONTH_PRICE_RUB
-              value: "990"
+              value: "5000"
             - name: PP_PRO_YEAR_PRICE_RUB
-              value: "9900"
+              value: "50000"
             - name: PP_PUBLIC_BASE
               valueFrom:
                 configMapKeyRef:

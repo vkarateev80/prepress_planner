@@ -124,11 +124,11 @@ class PaywallScreen extends StatelessWidget {
                 const SizedBox(height: 24),
                 FilledButton(
                     onPressed: () => onPurchase('month'),
-                    child: const Text('Месяц — 990 ₽')),
+                    child: const Text('Месяц — 5000 ₽')),
                 const SizedBox(height: 8),
                 FilledButton.tonal(
                     onPressed: () => onPurchase('year'),
-                    child: const Text('Год — 9 900 ₽ (выгоднее)')),
+                    child: const Text('Год — 50 000 ₽ (выгоднее)')),
                 const SizedBox(height: 8),
                 TextButton(
                     onPressed: () => onPurchase('restore'),

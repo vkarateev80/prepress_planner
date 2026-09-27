@@ -24,8 +24,8 @@ env:
   PP_PUBLIC_BASE           — публичный origin для return_url (ADR-6, 443)
   PP_RETURN_PATH           — путь возврата после оплаты (по умолчанию /billing/return)
   PP_TRIAL_DAYS            — срок триала в днях (по умолчанию 15, вне провайдера)
-  PP_PRO_MONTH_PRICE_RUB   — цена Pro-месяца (990)
-  PP_PRO_YEAR_PRICE_RUB    — цена Pro-года (9900)
+  PP_PRO_MONTH_PRICE_RUB   — цена Pro-месяца (5000)
+  PP_PRO_YEAR_PRICE_RUB    — цена Pro-года (50000)
   PP_WEBHOOK_MAX_BYTES     — лимит тела вебхука (65536)
 """
 from __future__ import annotations
@@ -87,8 +87,8 @@ YUKASSA_CONFIGURED = bool(YUKASSA_SHOP_ID and YUKASSA_SECRET_KEY)
 # ---------- триал и тарифы ----------
 
 TRIAL_DAYS = _env_int("PP_TRIAL_DAYS", 15)
-MONTH_PRICE_RUB = _env_int("PP_PRO_MONTH_PRICE_RUB", 990)
-YEAR_PRICE_RUB = _env_int("PP_PRO_YEAR_PRICE_RUB", 9900)
+MONTH_PRICE_RUB = _env_int("PP_PRO_MONTH_PRICE_RUB", 5000)
+YEAR_PRICE_RUB = _env_int("PP_PRO_YEAR_PRICE_RUB", 50000)
 
 WEBHOOK_MAX_BYTES = _env_int("PP_WEBHOOK_MAX_BYTES", 65536)
 

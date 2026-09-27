@@ -112,7 +112,7 @@ def verify_webhook_signature(raw_body: bytes, headers: Mapping[str, str],
 # --------------------------------------------------------------------------
 
 def rub_amount(value: Any) -> int:
-    """«990.00» → 990 ₽ (в billing деньги хранятся целыми рублями)."""
+    """«5000.00» → 5000 ₽ (в billing деньги хранятся целыми рублями)."""
     if value is None or value == "":
         return 0
     try:

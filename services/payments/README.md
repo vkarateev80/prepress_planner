@@ -138,8 +138,8 @@ entitlement-синхронизация прав.
 | `YUKASSA_RECEIPT_ENABLED` | `1` | `0` — не добавлять объект `receipt` (чек) в создание платежа |
 | `YUKASSA_RECEIPT_VAT_CODE` | `1` | код НДС в чеке (`1` — НДС включён в цену; строка) |
 | `PP_TRIAL_DAYS` | `15` | срок триала (вне провайдера) |
-| `PP_PRO_MONTH_PRICE_RUB` | `990` | цена Pro-месяца (30 дней) |
-| `PP_PRO_YEAR_PRICE_RUB` | `9900` | цена Pro-года (365 дней) |
+| `PP_PRO_MONTH_PRICE_RUB` | `5000` | цена Pro-месяца (30 дней) |
+| `PP_PRO_YEAR_PRICE_RUB` | `50000` | цена Pro-года (365 дней) |
 | `PP_PUBLIC_BASE` | пусто | публичный origin (ADR-6) для `return_url` |
 | `PP_RETURN_PATH` | `/billing/return` | путь возврата после оплаты |
 | `PP_RETURN_URL` | пусто | явный `return_url` (переопределяет `PP_PUBLIC_BASE`) |
