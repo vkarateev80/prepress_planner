@@ -1,0 +1,126 @@
+# Billing (ADR-3): подписки Pro, ЮKassa checkout/webhook, entitlement.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: billing-data
+  namespace: prepress
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: billing
+  namespace: prepress
+  labels:
+    app: billing
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: billing
+  template:
+    metadata:
+      labels:
+        app: billing
+    spec:
+      initContainers:
+        - name: wait-auth
+          image: busybox:1.36
+          command: ["sh", "-c", "until nc -z auth 8121; do sleep 1; done"]
+      containers:
+        - name: billing
+          image: pp-billing:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8122
+          env:
+            - name: PP_DATA_DIR
+              value: /srv/billing/data
+            - name: PP_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pp-secrets
+                  key: PP_DB_PASSWORD
+            - name: DB_URL
+              value: postgresql://pp_user:$(PP_DB_PASSWORD)@postgresql:5432/prepress_saas
+            - name: PP_AUTH_URL
+              value: http://auth:8121
+            - name: YUKASSA_SHOP_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: pp-config
+                  key: YUKASSA_SHOP_ID
+            - name: YUKASSA_SECRET_KEY
+              valueFrom:
+                configMapKeyRef:
+                  name: pp-config
+                  key: YUKASSA_SECRET_KEY
+            - name: YUKASSA_WEBHOOK_SECRET
+              valueFrom:
+                configMapKeyRef:
+                  name: pp-config
+                  key: YUKASSA_WEBHOOK_SECRET
+            - name: YUKASSA_API_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: pp-config
+                  key: YUKASSA_API_URL
+            - name: YUKASSA_SAVE_PAYMENT_METHOD
+              valueFrom:
+                configMapKeyRef:
+                  name: pp-config
+                  key: YUKASSA_SAVE_PAYMENT_METHOD
+            - name: PP_TRIAL_DAYS
+              value: "15"
+            - name: PP_PRO_MONTH_PRICE_RUB
+              value: "990"
+            - name: PP_PRO_YEAR_PRICE_RUB
+              value: "9900"
+            - name: PP_PUBLIC_BASE
+              valueFrom:
+                configMapKeyRef:
+                  name: pp-config
+                  key: PP_PUBLIC_BASE
+            - name: PP_RETURN_PATH
+              valueFrom:
+                configMapKeyRef:
+                  name: pp-config
+                  key: PP_RETURN_PATH
+          volumeMounts:
+            - name: data
+              mountPath: /srv/billing/data
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8122
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8122
+            initialDelaySeconds: 20
+            periodSeconds: 20
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: billing-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: billing
+  namespace: prepress
+spec:
+  selector:
+    app: billing
+  ports:
+    - port: 8122
+      targetPort: 8122

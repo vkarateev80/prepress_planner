@@ -1,0 +1,76 @@
+# Конвертер (ADR-7): AI/CDR/EPS → SVG/PDF, только сервер-к-серверу.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: converter-data
+  namespace: prepress
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: converter
+  namespace: prepress
+  labels:
+    app: converter
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: converter
+  template:
+    metadata:
+      labels:
+        app: converter
+    spec:
+      containers:
+        - name: converter
+          image: pp-converter:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8120
+          env:
+            - name: PP_DATA_DIR
+              value: /srv/converter/data
+            - name: PP_JOB_STORE
+              value: file
+            - name: PP_JOB_TTL_HOURS
+              value: "24"
+          volumeMounts:
+            - name: data
+              mountPath: /srv/converter/data
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8120
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8120
+            initialDelaySeconds: 30
+            periodSeconds: 20
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: converter-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: converter
+  namespace: prepress
+spec:
+  selector:
+    app: converter
+  ports:
+    - port: 8120
+      targetPort: 8120

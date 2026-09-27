@@ -1,0 +1,21 @@
+# Несекретная конфигурация стека (паритет с deploy/docker-compose.yml).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pp-config
+  namespace: prepress
+data:
+  PP_PUBLIC_BASE: "https://prepressplan.ru"
+  PP_RETURN_PATH: "/billing/return"
+  # ЮKassa: до подключения реальных ключей — значения по умолчанию;
+  # пустой WEBHOOK_SECRET → вебхук fail-closed (ADR-3).
+  YUKASSA_SHOP_ID: "test_shop"
+  YUKASSA_SECRET_KEY: "test_secret"
+  YUKASSA_WEBHOOK_SECRET: ""
+  YUKASSA_API_URL: "https://api.yookassa.ru/v3"
+  YUKASSA_SAVE_PAYMENT_METHOD: "0"
+  PP_SMTP_HOST: ""
+  PP_SMTP_PORT: "587"
+  PP_SMTP_USER: ""
+  PP_SMTP_PASSWORD: ""
+  PP_SMTP_FROM: ""

@@ -1,0 +1,107 @@
+# Auth (ADR-4): регистрации, сессии, организации/роли, приглашения F-19.
+# Хранилище — SQLite на PVC (DB_URL сервис не использует).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: auth-data
+  namespace: prepress
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth
+  namespace: prepress
+  labels:
+    app: auth
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: auth
+  template:
+    metadata:
+      labels:
+        app: auth
+    spec:
+      containers:
+        - name: auth
+          image: pp-auth:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8121
+          env:
+            - name: PP_DATA_DIR
+              value: /srv/auth/data
+            - name: PP_AUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: pp-secrets
+                  key: PP_AUTH_SECRET
+            - name: PP_TOKEN_TTL
+              value: "720"
+            - name: PP_RESET_TTL
+              value: "30"
+            - name: PP_SMTP_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: pp-config
+                  key: PP_SMTP_HOST
+            - name: PP_SMTP_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: pp-config
+                  key: PP_SMTP_PORT
+            - name: PP_SMTP_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: pp-config
+                  key: PP_SMTP_USER
+            - name: PP_SMTP_PASSWORD
+              valueFrom:
+                configMapKeyRef:
+                  name: pp-config
+                  key: PP_SMTP_PASSWORD
+            - name: PP_SMTP_FROM
+              valueFrom:
+                configMapKeyRef:
+                  name: pp-config
+                  key: PP_SMTP_FROM
+          volumeMounts:
+            - name: data
+              mountPath: /srv/auth/data
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8121
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8121
+            initialDelaySeconds: 20
+            periodSeconds: 20
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: auth-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth
+  namespace: prepress
+spec:
+  selector:
+    app: auth
+  ports:
+    - port: 8121
+      targetPort: 8121

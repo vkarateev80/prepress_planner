@@ -493,3 +493,31 @@ services/auth/README.md, docs/VERIFICATION.md (§10), docs/HANDOFF.md (§9, §14
 на этот домен страницы по ссылкам формы отдаваться не будут; вкладку
 «Реквизиты» приложения ждать тоже не нужно. Затем — боевой TLS
 (`get_prod_certs.sh`, §9 п.1).
+
+---
+
+## 16. Прод на k3s: 185.227.144.229 (2026-09-27)
+
+**Решение заказчика:** сервер зачищен от старых стеков (cleaning-ops/docker —
+тома сохранены), «Препресс-Планер» развёрнут **всем в Kubernetes** (k3s).
+
+- **Конфликт, который к этому привёл:** k3s ServiceLB (`svclb-traefik`) занял
+  80/443 на уровне nft (hostPort DNAT): ВЕСЬ трафик портов (включая
+  docker-proxy) уходил в Traefik — compose-edge оказался невостребован.
+- **Манифесты:** `deploy/k8s/` (namespace `prepress`, ConfigMap, секреты
+  генерирует `k8s/apply.sh`, PVC на local-path, 8 сервисов, Ingress +
+  ClusterIssuer `letsencrypt-prod` HTTP-01 через Traefik). Образы `pp-*`
+  собираются docker'ом и импортируются: `k3s ctr images import`.
+  Edge-nginx как под `web` (образ `pp-web`: SPA + `nginx-k8s.conf`,
+  plain HTTP; TLS у Traefik).
+- **Приёмка (через Traefik, Host: prepressplan.ru):** все 9 подов Ready;
+  `/healthz` → nginx-edge; `/auth/devices` → 401; `/legal/`, `/legal/pricing`
+  → 200; сквозной путь `POST /auth/register 201 → POST /api/projects 201 →
+  POST /calculate` → **эталон 1:1 (9×5, 5040, 26.18 %, 704.88 ₽)**.
+- **Уроки:** init-контейнер ждать зависимости обязан с `nc -w 2` (без
+  таймаута — зависание на SYN-drop до ~15 мин); pull образов из Docker Hub
+  на этом сервере медленный (2–3 мин на образ).
+- **Остаётся:** DNS A `prepressplan.ru → 185.227.144.229` (через API reg.ru,
+  доступ у заказчика) → cert-manager выпустит LE-сертификат автоматически;
+  `kubectl -n prepress get certificate prepressplan-tls`.
+  compose-стек на сервере остановлен (`docker compose down`, тома целы).

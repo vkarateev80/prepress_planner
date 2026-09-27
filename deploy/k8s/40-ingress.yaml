@@ -1,0 +1,44 @@
+# TLS: cert-manager (Let's Encrypt) + Traefik (k3s edge).
+# HTTP-01 через ingress Traefik — работает только после указания DNS
+# prepressplan.ru → IP сервера (см. k8s/README.md, шаг 3).
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: admin@prepressplan.ru
+    privateKeySecretRef:
+      name: letsencrypt-prod-account
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: traefik
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: prepress
+  namespace: prepress
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    # Traefik: cert-manager правит этот же Ingress (а не создаёт временный).
+    cert-manager.io/http01-edit-in-place: "true"
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - prepressplan.ru
+      secretName: prepressplan-tls
+  rules:
+    - host: prepressplan.ru
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  number: 80

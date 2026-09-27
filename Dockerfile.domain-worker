@@ -18,6 +18,9 @@ COPY packages/core /src/packages/core
 COPY services/domain-worker /src/services/domain-worker
 
 WORKDIR /src/services/domain-worker
+# /out: в свежих образах dart:stable каталога нет — создаём явно
+# (PathNotFoundException при dart compile -o /out/…, живой деплой 2026-09-27).
+RUN mkdir -p /out
 # --offline: pub.dev недоступен по требованиям среды (PRD §8.1, N-8).
 # Анализ — только продуктовый код (test/tool требуют fixtures из корня репо,
 # в образ они не копируются).

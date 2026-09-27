@@ -1,14 +1,17 @@
 #!/bin/bash
 # =============================================================
-#  Первичная настройка НОВОГО Ubuntu-сервера «Препресс-Планер»
+#  Первичная настройка сервера «Препресс-Планер» (SaaS-стек)
 #  Запуск от root:  bash install_new_server.sh
 #
-#  Предполагается структура (из бандла pp-new-server-stack.tar.gz):
-#    <root>/deploy/{docker-compose.yml, nginx/, .env.example, install_new_server.sh}
-#    <root>/deploy/web/          - статика flutter build web
-#    <root>/services/{converter,auth,payments}/
+#  Структура (из бандла pp-new-server-stack.tar.gz):
+#    <root>/deploy/{docker-compose.yml, nginx/, .env.example, …}
+#    <root>/deploy/web/               — статика flutter build web
+#    <root>/services/{api,converter,auth,payments,domain-worker}/
+#    <root>/packages/core/ + <root>/Dockerfile.domain-worker
 #
-#  Скрипт идемпотентен: повторный запуск просто пересобирает/перезапускает.
+#  Скрипт идемпотентен: повторный запуск пересобирает/перезапускает.
+#  Порты наружу: только nginx (80/443); внутренние сервисы не публикуются
+#  (ADR-6). Порт 80 должен быть свободен (nginx + ACME HTTP-01).
 # =============================================================
 set -e
 cd "$(dirname "$0")"
@@ -28,12 +31,13 @@ fi
 systemctl enable --now docker >/dev/null 2>&1 || true
 docker compose version
 
-echo "[3/5] .env (секрет)"
+echo "[3/5] .env (секреты)"
 if [ ! -f .env ]; then
-  SECRET="${PP_AUTH_SECRET:-$(openssl rand -hex 32)}"
   cat > .env <<EOF
 # Сгенерирован install_new_server.sh
-PP_AUTH_SECRET=${SECRET}
+PP_AUTH_SECRET=${PP_AUTH_SECRET:-$(openssl rand -hex 32)}
+PP_DB_PASSWORD=${PP_DB_PASSWORD:-$(openssl rand -hex 24)}
+PP_PUBLIC_BASE=${PP_PUBLIC_BASE:-https://prepressplan.ru}
 
 PP_SMTP_HOST=
 PP_SMTP_PORT=587
@@ -41,30 +45,45 @@ PP_SMTP_USER=
 PP_SMTP_PASSWORD=
 PP_SMTP_FROM=
 EOF
-  echo ".env создан (PP_AUTH_SECRET сгенерирован). Почту при необходимости заполните вручную."
+  echo ".env создан: PP_AUTH_SECRET, PP_DB_PASSWORD, PP_PUBLIC_BASE."
+  echo "Почта (PP_SMTP_*), ключи ЮKassa и PP_OFFSITE_* — заполните вручную."
 else
   echo ".env уже есть — оставляю."
+fi
+
+echo "[3.5/5] TLS-сертификат (dev-самоподпись; прод — get_prod_certs.sh)"
+if [ ! -f nginx/certs/fullchain.pem ] || [ ! -f nginx/certs/privkey.pem ]; then
+  PP_TLS_CN="${PP_TLS_CN:-prepressplan.ru}" bash nginx/gen_dev_certs.sh
+else
+  echo "Сертификаты уже есть — не трогаю."
 fi
 
 echo "[4/5] docker compose up -d --build"
 docker compose up -d --build
 
-echo "[5/5] ожидание здоровья"
-for i in $(seq 1 30); do
-  C8120=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8120/healthz || true)
-  C8121=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8121/healthz || true)
-  C8122=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8122/healthz || true)
-  C8081=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8081/ || true)
-  echo "  probe: converter=$C8120 auth=$C8121 payments=$C8122 web=$C8081"
-  if [ "$C8120" = "200" ] && [ "$C8121" = "200" ] && [ "$C8122" = "200" ] && [ "$C8081" = "200" ]; then
-    echo "ВСЕ СЕРВИСЫ РАБОТАЮТ."
-    docker compose ps
-    echo
-    echo "Web:      http://<IP-сервера>:8081"
-    echo "Прямые:   converter 8120, auth 8121, payments 8122"
-    exit 0
+echo "[5/5] ожидание здоровья (edge https://127.0.0.1)"
+OK=""
+for i in $(seq 1 60); do
+  HZ=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 3 https://127.0.0.1/healthz || true)
+  SPA=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 3 https://127.0.0.1/ || true)
+  AUTH=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 3 https://127.0.0.1/auth/devices || true)
+  echo "  probe: healthz=$HZ spa=$SPA auth=$AUTH"
+  if [ "$HZ" = "200" ] && [ "$SPA" = "200" ] && [ "$AUTH" = "401" ]; then
+    OK=1
+    break
   fi
   sleep 5
 done
-echo "НЕ ВСЕ СЕРВИСЫ ПОДНЯЛИСЬ за 150 c — смотрите: docker compose ps && docker compose logs"
+
+docker compose ps
+if [ -n "$OK" ]; then
+  echo
+  echo "СТЕК РАБОТАЕТ:"
+  echo "  https://<домен>/          (SPA; до смены DNS — https://<IP>/, браузер ругается на dev-сертификат)"
+  echo "  https://<домен>/legal/    (реквизиты/оферта/тарифы)"
+  echo "  Проверка: curl -sk https://127.0.0.1/healthz"
+  echo "  Прод-сертификат: PP_DOMAIN=<домен> bash nginx/get_prod_certs.sh"
+  exit 0
+fi
+echo "СЕРВИСЫ НЕ ЗДОРОВЫ за 300 c — docker compose ps && docker compose logs --tail 50"
 exit 1

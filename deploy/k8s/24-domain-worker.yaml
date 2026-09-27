@@ -1,0 +1,57 @@
+# Domain-worker (ADR-2): чистый Dart VM, AOT-сборка packages/core внутри образа.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: domain-worker
+  namespace: prepress
+  labels:
+    app: domain-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: domain-worker
+  template:
+    metadata:
+      labels:
+        app: domain-worker
+    spec:
+      containers:
+        - name: domain-worker
+          image: pp-domain-worker:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8101
+          env:
+            - name: PP_DATA_DIR
+              value: /srv/domain/data
+          volumeMounts:
+            - name: data
+              mountPath: /srv/domain/data
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8101
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8101
+            initialDelaySeconds: 20
+            periodSeconds: 20
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: domain-worker
+  namespace: prepress
+spec:
+  selector:
+    app: domain-worker
+  ports:
+    - port: 8101
+      targetPort: 8101

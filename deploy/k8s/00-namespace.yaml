@@ -1,0 +1,7 @@
+# Namespace для всего стека «Препресс-Планер».
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: prepress
+  labels:
+    app.kubernetes.io/part-of: prepress-planner

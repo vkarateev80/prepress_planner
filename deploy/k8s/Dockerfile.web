@@ -1,0 +1,7 @@
+# Образ edge-nginx для k8s: статика Flutter Web + прокси (nginx-k8s.conf).
+# Сборка (контекст — deploy/):
+#   docker build -f k8s/Dockerfile.web -t pp-web:latest .
+FROM nginx:1.31-alpine
+COPY web/ /usr/share/nginx/html/
+COPY k8s/nginx-k8s.conf /etc/nginx/conf.d/default.conf
+EXPOSE 80
