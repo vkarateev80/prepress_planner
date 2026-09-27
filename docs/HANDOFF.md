@@ -556,3 +556,16 @@ services/auth/README.md, docs/VERIFICATION.md (§10), docs/HANDOFF.md (§9, §14
   (server125): info, support, billing, dpo (пароли выданы заказчику в чате).
   Почтовый домен настроен автоматически, DKIM/DMARC TXT-записи панель
   добавила в зону сама (проверено у ns1.hosting.reg.ru); SPF был ранее.
+
+### 16.3 SMTP и бэкапы в k3s (2026-09-27)
+
+- **SMTP** настроен на хостинге reg.ru: `mail.hosting.reg.ru:587` (STARTTLS,
+  AUTH проверен — `235 OK`), логин/отправитель `info@prepressplan.ru`
+  (пароль — как у почтового ящика). В ConfigMap `pp-config` (01-config.yaml),
+  rollout auth → healthz `"smtp": true`. Сброс пароля и письма-приглашения
+  теперь реально отправляются; финальное тестовое письмо — заказчику.
+- **Бэкапы**: compose-скрипт заменён в k8s на `deploy/k8s/backup.sh`
+  (kubectl exec pg_dump + tar-зеркало MinIO + опциональный offsite по
+  `PP_OFFSITE_*`). Живой тест: дамп БД + 18 файлов bucket. **Cron на сервере**:
+  `0 4 * * *` → `/var/log/pp-backup.log`, каталог `deploy/backups/`
+  (в .gitignore). Восстановление — в шапке скрипта.

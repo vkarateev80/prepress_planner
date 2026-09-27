@@ -77,3 +77,21 @@ cd deploy && docker compose up -d --build   # данные старого compos
 - `svclb-traefik` — штатный ServiceLB k3s; не удалять (это и есть edge).
 - Образы `pp-*` собираются docker'ом и импортируются в containerd
   (`k3s ctr images import`) — k3s своих сборок не делает.
+
+## Резервное копирование (k3s)
+
+```bash
+bash k8s/backup.sh            # → deploy/backups/db_<метка>.sql.gz + bucket/
+```
+
+Шаги: `pg_dump` из пода postgresql → зеркало данных MinIO (tar-поток) →
+опционально offsite (`PP_OFFSITE_*`, те же переменные что и в compose-версии).
+Cron на сервере уже установлен: **ежедневно в 04:00**, лог
+`/var/log/pp-backup.log`. Восстановление БД — в шапке скрипта.
+
+## SMTP (письма: сброс пароля, приглашения F-19)
+
+Настроен в ConfigMap `pp-config` (`01-config.yaml`): хостинг reg.ru
+`mail.hosting.reg.ru:587` (STARTTLS), отправитель `info@prepressplan.ru`
+(ящик создан в панели server125). Проверка: `GET /healthz` auth → `"smtp": true`.
+Смена пароля ящика → обновить ConfigMap и `rollout restart deploy/auth`.

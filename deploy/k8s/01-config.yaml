@@ -14,8 +14,11 @@ data:
   YUKASSA_WEBHOOK_SECRET: ""
   YUKASSA_API_URL: "https://api.yookassa.ru/v3"
   YUKASSA_SAVE_PAYMENT_METHOD: "0"
-  PP_SMTP_HOST: ""
+  # SMTP хостинга reg.ru (проверено: AUTH 235 OK на mail.hosting.reg.ru:587,
+  # STARTTLS; логин = полный адрес ящика).
+  PP_SMTP_HOST: "mail.hosting.reg.ru"
   PP_SMTP_PORT: "587"
-  PP_SMTP_USER: ""
-  PP_SMTP_PASSWORD: ""
-  PP_SMTP_FROM: ""
+  PP_SMTP_USER: "info@prepressplan.ru"
+  PP_SMTP_PASSWORD: "Info_Pp2026!"
+  PP_SMTP_FROM: "info@prepressplan.ru"
+  PP_SMTP_SSL: ""
