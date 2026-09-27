@@ -521,3 +521,23 @@ services/auth/README.md, docs/VERIFICATION.md (§10), docs/HANDOFF.md (§9, §14
   доступ у заказчика) → cert-manager выпустит LE-сертификат автоматически;
   `kubectl -n prepress get certificate prepressplan-tls`.
   compose-стек на сервере остановлен (`docker compose down`, тома целы).
+
+### 16.1 DNS + боевой TLS (2026-09-27, закрыто)
+
+- **DNS**: A `@`/`www prepressplan.ru → 185.227.144.229` изменены в панели
+  хостинга (ispmanager `server125.hosting.reg.ru:1500`, логин `u3638907`).
+  API reg.ru недоступен извне (`ACCESS_DENIED_FROM_IP` + методы zone/*
+  только для партнёров) — правки делались через панель. Удалены AAAA `@` и
+  `www` (у нового сервера нет v6-LB Traefik — v6-клиенты уходят по A);
+  почтовые/ftp-записи (mail/smtp/pop/ftp A+AAAA → старый VPS) и MX/TXT/NS
+  не тронуты.
+- **TLS**: cert-manager ClusterIssuer `letsencrypt-prod` (HTTP-01 через
+  Traefik) → сертификат **Let's Encrypt выпущен** (CN=prepressplan.ru,
+  до 26.12.2026, secret `prepress/prepressplan-tls`).
+  Ловушка: self-check висел на кэшах DNS (CoreDNS отдавал старый A) —
+  лечится `rollout restart -n kube-system deploy/coredns`; кэш
+  systemd-resolved — `resolvectl flush-caches`.
+- **Приёмка по HTTPS**: `/` → 200, `/healthz` → nginx-edge, `/legal/` → 200,
+  `/auth/devices` → 401, цепочка доверия валидна.
+- Ссылки для формы ЮKassa рабочие: `https://prepressplan.ru/`,
+  реквизиты `https://prepressplan.ru/legal/`.
