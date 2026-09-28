@@ -672,3 +672,14 @@ test **52/52**, build web OK; `docker compose config` OK; kubectl
 `PP_SMS_PROVIDER`, DEPLOY_CHECKLIST «Внешние действия» п.5) — до этого
 на проде dev-режим: SMS-код виден в ответе. Деплой на прод (образ auth +
 применение манифестов) — после санкции владельца.
+
+**Деплой (2026-09-28, после коммита `0339ddd`):** образы `pp-auth`/`pp-web`
+собраны на сервере и импортированы в k3s, `01-config.yaml` +
+`20-auth.yaml` применены, rollout auth+web Successful; живой прогон на
+`prepressplan.ru` — 202/403/400/201/409/200 + resend 429, миграция
+7/7 verified, тестовый юзер удалён (VERIFICATION §12.4).
+
+**1/1-вытеснение (2026-09-28, позже в тот же день):** владелец сообщил,
+что simultaneous-вход комп+телефон работает — лимит был удалён ещё при
+SaaS-адаптации, UI обещал 1/1. Возвращено: `login`/`confirm` отзывают
+прежние сессии, `device_policy` → `single` (VERIFICATION §13).

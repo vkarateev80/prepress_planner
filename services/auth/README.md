@@ -7,9 +7,9 @@ Self-hosted auth «Препресс-Планер» (SaaS): аккаунты emai
 
 - **Сессии — серверные**: таблица `sessions`, токены opaque (в БД — только
   sha256), отзыв работает индивидуально (`/auth/logout`,
-  `/auth/sessions/{id}/revoke`). Лимит устройств **1/1 удалён** — у
-  пользователя может быть несколько активных сессий (браузер + десктоп),
-  `device_id` необязателен и ничего не вытесняет.
+  `/auth/sessions/{id}/revoke`). Политика **1/1 (вытеснение)**: у аккаунта
+  ровно одна активная сессия — вход (`login`/`confirm`) отзывает все
+  прежние; `device_id` необязателен.
 - **Пароли** — `pbkdf2_hmac sha256`, 200 000 итераций, соль
   `secrets.token_hex(16)`, формат `salt$digest_hex` (инвариант N-5, без
   изменений).
@@ -27,12 +27,12 @@ Self-hosted auth «Препресс-Планер» (SaaS): аккаунты emai
 | `POST /auth/register` | `{email, password, phone, org_name?, device_id?}` | `202 {pending:true, email, phone, dev_email_code?, dev_phone_code?, sms_sent}` — сессии НЕТ |
 | `POST /auth/confirm` | `{email, email_code, phone_code, device_id?}` | `201 {token, user{id,email}, orgs[{org_id,role}]}` / `400` неверный код / `404` нет регистрации / `409` уже подтверждён |
 | `POST /auth/confirm/resend` | `{email, channel:"email"\|"phone"}` | `200 {ok:true, dev_*_code?}` / `429` кулдаун |
-| `POST /auth/login` | `{email, password, device_id?}` | `200 {token, user, orgs[]}` / `403` аккаунт не подтверждён |
+| `POST /auth/login` | `{email, password, device_id?}` | `200 {token, user, orgs[]}` (вытесняет прежние сессии — 1/1) / `403` аккаунт не подтверждён |
 | `POST /auth/logout` | Bearer | `200 {ok, user_id}` — отзывается только эта сессия |
 | `GET /auth/me` | Bearer | `200 {user, orgs[], memberships[], session}` |
 | `GET /auth/sessions` | Bearer | `200 {sessions:[{id,device_id,current,created_at,expires_at}], count}` |
 | `POST /auth/sessions/{id}/revoke` | Bearer | `200 {ok, revoked}` / `404` |
-| `GET /auth/devices` | Bearer | совместимость с desktop: `{devices, current, count, device_policy:"multi"}` |
+| `GET /auth/devices` | Bearer | совместимость с desktop: `{devices, current, count, device_policy:"single"}` (1/1 — обычно одна запись) |
 | `GET /auth/orgs` | Bearer | `200 {orgs:[{org_id,name,role,created_at}]}` |
 | `POST /auth/orgs` | Bearer `{name}` | `201 {org_id, name, role:"owner"}` |
 | `GET /auth/orgs/{org_id}/members` | Bearer (член org) | `200 {members:[{user_id,email,role,invited_by,created_at}]}` |
@@ -42,7 +42,7 @@ Self-hosted auth «Препресс-Планер» (SaaS): аккаунты emai
 | `POST /auth/verify` | Bearer (внутренний вызов billing/api) | `200 {sub, email, orgs:[{org_id,role}]}` |
 | `POST /auth/forgot` | `{email}` | `200 {ok:true}` — всегда, кода в ответе нет |
 | `POST /auth/reset` | `{email, code, new_password}` | `200 {ok:true}` / `400` код / `404` email |
-| `GET /healthz` | — | статус, `device_policy:"multi"`, `multitenant:true`, `smtp`, `sms`, TTL |
+| `GET /healthz` | — | статус, `device_policy:"single"` (лимит 1), `multitenant:true`, `smtp`, `sms`, TTL |
 
 **Регистрация двухфазная** (подтверждение почты и телефона): `register`
 создаёт пользователя **без сессии** и шлёт два 6-значных кода (TTL =
@@ -163,7 +163,7 @@ python -m pytest tests -q
 Покрыто: healthz, двухфазная регистрация (register → confirm: 403 до
 подтверждения, неверные коды, повторный confirm 409, кулдаун resend 429),
 регистрация с/без организации, роли и memberships,
-мультисессии (отсутствие вытеснения), отзыв сессии по id, logout,
+политика 1/1 (вход вытесняет прежние сессии; неудачный вход сессию не трогает), отзыв сессии по id, logout,
 forgot/reset (без `dev_code`, одноразовость, отзыв всех сессий),
 `/auth/verify` с `orgs`, формат парольного хеша (pbkdf2 200k), sha256
 токенов в БД, миграция legacy-БД (в т.ч. backfill подтверждений),

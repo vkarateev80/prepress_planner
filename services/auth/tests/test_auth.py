@@ -2,7 +2,7 @@
 """Тесты микросервиса авторизации (SaaS-модель).
 
 Проверяем контракт System Design v1 §12.2 / §13.1: организации и роли,
-мультисессии (лимит устройств 1/1 удалён), forgot/reset без dev_code,
+политика 1/1 (вход вытесняет прежние сессии), forgot/reset без dev_code,
 отзыв сессий, /auth/verify для внутренних сервисов, миграция legacy-БД.
 """
 import os
@@ -87,8 +87,8 @@ def test_healthz():
     assert r.status_code == 200
     body = r.json()
     assert body["sessions"] == "server-side"
-    assert body["device_policy"] == "multi"
-    assert body["device_limit"] is None
+    assert body["device_policy"] == "single"
+    assert body["device_limit"] == 1
     assert body["multitenant"] is True
     assert set(body["roles"]) == {"owner", "admin", "member", "viewer"}
 
@@ -145,8 +145,8 @@ def test_register_duplicate_email_409_and_bad_input():
     assert r.status_code == 422
 
 
-def test_login_returns_orgs_and_multiple_sessions_coexist():
-    """Лимит устройств 1/1 удалён: вход со второго device_id не вытесняет первый."""
+def test_login_returns_orgs_and_kicks_previous_sessions():
+    """Политика 1/1: вход вытесняет прежние сессии пользователя."""
     email = _email("multi")
     first = _register(email, org_name="Мульти")
     token_a = first["token"]
@@ -157,62 +157,64 @@ def test_login_returns_orgs_and_multiple_sessions_coexist():
     token_b = r.json()["token"]
     assert r.json()["orgs"] == first["orgs"]
 
-    # Обе сессии живы.
-    assert client.get("/auth/me", headers=_auth(token_a)).status_code == 200
+    # Прежняя сессия вытеснена, новая жива.
+    assert client.get("/auth/me", headers=_auth(token_a)).status_code == 401
     assert client.get("/auth/me", headers=_auth(token_b)).status_code == 200
 
+    # Ровно одна активная сессия.
     r = client.get("/auth/sessions", headers=_auth(token_b))
     assert r.status_code == 200
     items = r.json()["sessions"]
-    assert len(items) == 2
-    assert sum(1 for s in items if s["current"]) == 1
+    assert len(items) == 1 and items[0]["current"] is True
 
-    # Совместимый /auth/devices возвращает тот же список без лимита.
+    # Совместимый /auth/devices: одна запись, политика single.
     r = client.get("/auth/devices", headers=_auth(token_b))
     assert r.status_code == 200
-    assert len(r.json()["devices"]) == 2
-    assert r.json()["device_policy"] == "multi"
+    assert len(r.json()["devices"]) == 1
+    assert r.json()["device_policy"] == "single"
 
-    # Вход без device_id тоже работает (device_id необязателен).
+    # Повторный вход без device_id вытесняет dev-b-сессию.
     r = client.post("/auth/login", json={"email": email,
                                          "password": "secret1"})
     assert r.status_code == 200
+    token_c = r.json()["token"]
+    assert client.get("/auth/me", headers=_auth(token_b)).status_code == 401
+    assert client.get("/auth/me", headers=_auth(token_c)).status_code == 200
 
-    # Неверный пароль.
+    # Неверный пароль не трогает текущую сессию (удаление — после проверки).
     r = client.post("/auth/login", json={"email": email,
                                          "password": "wrong!"})
     assert r.status_code == 401
+    assert client.get("/auth/me", headers=_auth(token_c)).status_code == 200
 
 
 def test_session_revoke_by_id():
     email = _email("revoke")
-    token_a = _register(email)["token"]
-    token_b = client.post("/auth/login", json={
-        "email": email, "password": "secret1", "device_id": "dev-b"}).json()["token"]
+    token = _register(email)["token"]
 
-    r = client.get("/auth/sessions", headers=_auth(token_a))
-    other = next(s for s in r.json()["sessions"] if not s["current"])
-    r = client.post(f"/auth/sessions/{other['id']}/revoke",
-                    headers=_auth(token_a))
-    assert r.status_code == 200
-    assert client.get("/auth/me", headers=_auth(token_b)).status_code == 401
-    assert client.get("/auth/me", headers=_auth(token_a)).status_code == 200
+    r = client.get("/auth/sessions", headers=_auth(token))
+    assert r.status_code == 200 and r.json()["count"] == 1
+    only = r.json()["sessions"][0]
 
+    # Несуществующий id — 404.
     r = client.post("/auth/sessions/deadbeefdeadbeef/revoke",
-                    headers=_auth(token_a))
+                    headers=_auth(token))
     assert r.status_code == 404
 
+    # Отзыв своей сессии работает (после — 401).
+    r = client.post(f"/auth/sessions/{only['id']}/revoke",
+                    headers=_auth(token))
+    assert r.status_code == 200
+    assert client.get("/auth/me", headers=_auth(token)).status_code == 401
 
-def test_logout_revokes_only_current_session():
+
+def test_logout_revokes_session():
     email = _email("logout")
-    token_a = _register(email)["token"]
-    token_b = client.post("/auth/login", json={
-        "email": email, "password": "secret1"}).json()["token"]
+    token = _register(email)["token"]
 
-    r = client.post("/auth/logout", headers=_auth(token_a))
+    r = client.post("/auth/logout", headers=_auth(token))
     assert r.status_code == 200 and r.json()["ok"] is True
-    assert client.get("/auth/me", headers=_auth(token_a)).status_code == 401
-    assert client.get("/auth/me", headers=_auth(token_b)).status_code == 200
+    assert client.get("/auth/me", headers=_auth(token)).status_code == 401
 
 
 def test_create_org_and_roles():

@@ -400,3 +400,62 @@ register → confirm; SMS — **сначала dev-режим** (каркас п
   `20-auth.yaml` — OK.
 - Прод не откатывался: деплой манифестов/образа — отдельным шагом
   (согласование владельца).
+
+### 12.4 Деплой на прод и живой прогон (2026-09-28)
+
+Образы `pp-auth`/`pp-web` собраны на сервере (`/opt/pp/stack`, исходники и
+`flutter build web` синхронизированы), импортированы
+`k3s ctr images import`; применены `01-config.yaml` (ConfigMap
+`PP_SMS_PROVIDER=dev`) и `20-auth.yaml`; `rollout restart` auth+web —
+оба Successful, 8/8 подов Running.
+
+Живой прогон через `https://prepressplan.ru` (фактические ответы):
+- `register` (email+password+phone) → **202** `{pending, sms_sent:false,
+  dev_phone_code:"152355"}`, `dev_email_code` отсутствует (SMTP настроен —
+  код ушёл письмом);
+- `register` без `phone` → **422** `Field required`;
+- `login` до confirm → **403** «Аккаунт не подтверждён…»;
+- неверные коды → **400** («код почты»/«код телефона»);
+- `confirm` (код почты подменён на известный хеш в БД — письмо ушло на
+  example.com, штатно код из письма) → **201** сессия, `orgs: 1`;
+- `GET /auth/me` → 200; повторный `confirm` → **409**; `login` → **200**,
+  `sessions count: 2`;
+- `confirm/resend` phone → **200** `dev_phone_code`, повторно → **429**,
+  неизвестный email → **200 {ok:true}**;
+- миграция прода: `users 7`, `verified 7` (backfill отработал);
+- `main.dart.js` отдаётся новый (`dev_phone_code`/`confirm/resend` в
+  бандле, last-modified 18:06).
+
+Тестовый пользователь `confirm-live@example.com` после прогона удалён
+(пользователь, организация, сессии, коды — `CLEANUP_OK`), на проде снова
+7 исходных аккаунтов.
+
+## 13. Политика 1/1: вытеснение сессий (2026-09-28)
+
+**Сообщение владельца:** «защита одна машина-один аккаунт не работает —
+я залогинился одновременно на компе и на телефоне». Выяснено: лимит 1/1
+был **сознательно удалён** при SaaS-адаптации (мультисессии), но UI
+обещал обратное («Вход с другого устройства вытеснит это (лимит 1/1)»).
+Решение владельца: **вернуть вытеснение**.
+
+**Изменения (services/auth):**
+- `login` и `confirm`: перед выдачей сессии —
+  `DELETE FROM sessions WHERE user_id = ?` (прежние сессии отзываются).
+  Неудачный вход (401/403) сессии не трогает — удаление после проверки
+  пароля и verified.
+- `GET /auth/devices`: `device_policy` `multi` → **`single`**;
+  `healthz`: `device_policy:"single"`, `device_limit:1`.
+- Клиент (Flutter) не менялся: FakeGateway уже вытеснял, UI-копирайт и
+  доки `account_client` уже обещали 1/1 — расходился только сервер.
+
+**Прогоны:** pytest **161 passed, 1 skipped** (auth 30: переписаны тесты
+мультивхода → «вход вытесняет прежние; список сессий = 1; неудачный вход
+не трогает сессию»); flutter analyze 0, test **52/52**.
+
+**Деплой и живая проверка (prepressplan.ru):** образ `pp-auth`
+пересобран/импортирован, `rollout restart` auth — Successful. Сценарий:
+`register`+`confirm` (токен A — «комп») → `login` (токен B — «телефон») →
+`me(A)` = **401** (вытеснен), `me(B)` = **200**, `sessions count = 1`,
+`devices {count:1, device_policy:"single"}`, auth `healthz`
+`device_policy:single, device_limit:1`. Тестовый пользователь удалён
+(`CLEANUP_OK`, снова 7 аккаунтов).

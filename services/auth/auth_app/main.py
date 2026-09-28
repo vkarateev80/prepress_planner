@@ -5,9 +5,10 @@
 
 Аккаунты email+пароль, СЕРВЕРНЫЕ сессии (таблица sessions, opaque-токены,
 в БД — только sha256), отзыв сессии реально работает. Мультитенантность:
-организации и членство с ролями (owner/admin/member/viewer). Лимит устройств
-1/1 и вытеснение сессии по device_id УДАЛЕНЫ: пользователь может иметь
-несколько активных сессий (браузер + десктоп-совместимость).
+организации и членство с ролями (owner/admin/member/viewer). Политика
+**1/1 (вытеснение)**: у аккаунта ровно одна активная сессия — вход
+(login/confirm) отзывает все прежние сессии пользователя («вход с другого
+устройства вытеснит это»).
 
 Legacy `services/license` (machine-id, офлайн-токены) в SaaS-пути не
 используется — auth его не вызывает и о нём не знает. Внутренние сервисы
@@ -45,6 +46,7 @@ API:
                                                               → 201 {token, user, orgs}
   POST /auth/confirm/resend    {email, channel}               → {ok, dev_*_code?}
   POST /auth/login             {email, password, device_id?} → {token, user, orgs}
+                               (вытесняет прежние сессии — 1/1)
   POST /auth/logout            (Bearer)                      → {ok, user_id}
   GET  /auth/me                (Bearer)                      → {user, orgs, memberships}
   GET  /auth/sessions          (Bearer)                      → {sessions:[{id,...,current}]}
@@ -753,6 +755,9 @@ def confirm(body: ConfirmIn):
             "UPDATE users SET email_verified_at = ?, phone_verified_at = ?, "
             "updated_at = ? WHERE id = ?",
             (now, now, now, row["id"]))
+        # Политика 1/1: при выдаче первой сессии старые (не должно быть) —
+        # на всякий случай отзываем.
+        conn.execute("DELETE FROM sessions WHERE user_id = ?", (row["id"],))
         token = _issue_session(conn, row["id"], body.device_id)
         orgs = _orgs_of(conn, row["id"])
         row = conn.execute(
@@ -811,7 +816,7 @@ def confirm_resend(body: ConfirmResendIn):
 
 @app.post("/auth/login")
 def login(body: LoginIn):
-    """Вход: новая серверная сессия; прежние сессии НЕ вытесняются.
+    """Вход: новая серверная сессия; прежние сессии вытесняются (1/1).
 
     Неподтверждённый аккаунт (двухфазная регистрация) — 403.
     """
@@ -828,6 +833,8 @@ def login(body: LoginIn):
             raise HTTPException(
                 status_code=403,
                 detail="Аккаунт не подтверждён. Введите коды с почты и из SMS.")
+        # Политика 1/1: прежние сессии пользователя вытесняются.
+        conn.execute("DELETE FROM sessions WHERE user_id = ?", (row["id"],))
         token = _issue_session(conn, row["id"], body.device_id)
         orgs = _orgs_of(conn, row["id"])
     return {"token": token, "user": _user_row(row), "orgs": _orgs_brief(orgs)}
@@ -864,7 +871,7 @@ def me(user: dict = Depends(_auth_dep)):
 
 @app.get("/auth/sessions")
 def sessions(user: dict = Depends(_auth_dep)):
-    """Активные сессии пользователя (мультисессии; лимита 1/1 больше нет)."""
+    """Активные сессии пользователя (политика 1/1 — обычно одна)."""
     with _db_lock, _connect() as conn:
         rows = conn.execute(
             "SELECT token_hash, device_id, created_at, expires_at "
@@ -900,12 +907,13 @@ def revoke_session(session_id: str, user: dict = Depends(_auth_dep)):
 def devices(user: dict = Depends(_auth_dep)):
     """Совместимость с desktop-клиентом: то же, что /auth/sessions.
 
-    Политики вытеснения нет — список может содержать несколько записей.
+    Политика 1/1: список обычно содержит одну запись (вход вытесняет
+    прежние сессии).
     """
     data = sessions(user)
     return {"devices": data["sessions"], "current":
             next((s["id"] for s in data["sessions"] if s["current"]), None),
-            "count": data["count"], "device_policy": "multi"}
+            "count": data["count"], "device_policy": "single"}
 
 
 @app.get("/auth/orgs")
@@ -1149,7 +1157,7 @@ def healthz():
     smtp = _smtp_config()
     return {"status": "ok", "service": "auth", "version": app.version,
             "db": str(DB_PATH), "sessions": "server-side",
-            "device_policy": "multi", "device_limit": None,
+            "device_policy": "single", "device_limit": 1,
             "multitenant": True, "roles": list(ROLES),
             "default_org": DEFAULT_ORG, "smtp": bool(smtp),
             "sms": SMS_PROVIDER, "reset_ttl_min": RESET_TTL_MIN}
