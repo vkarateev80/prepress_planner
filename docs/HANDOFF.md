@@ -569,3 +569,39 @@ services/auth/README.md, docs/VERIFICATION.md (§10), docs/HANDOFF.md (§9, §14
   `PP_OFFSITE_*`). Живой тест: дамп БД + 18 файлов bucket. **Cron на сервере**:
   `0 4 * * *` → `/var/log/pp-backup.log`, каталог `deploy/backups/`
   (в .gitignore). Восстановление — в шапке скрипта.
+
+---
+
+## 17. Состояние на конец сеанса (2026-09-28)
+
+**Аккаунты на проде (auth в k3s, ns=prepress):**
+- **`info@prepressplan.ru` / `Info_Pp2026!`** — основной рабочий/тестовый
+  аккаунт: триал Pro активен, тот же пароль что у почтового ящика (SMTP
+  подтверждён письмом). Рекомендуется для личной проверки.
+- `k8s-accept-1790523361@example.com` / `Accept2026` — приёмочный (есть
+  проект «k8s-приёмка» с эталонным расчётом).
+- `pdf-fix*@example.com` / `PdfFix2026` — одноразовые под проверку PDF.
+
+**Git:** ветка `main` **ahead origin на 8 коммитов** (e7fe959…2399cc2) —
+push НЕ делался (ждёт санкции владельца). Дерево чистое.
+
+**Прод:** https://prepressplan.ru — k3s `prepress` (185.227.144.229),
+Let's Encrypt до 26.12.2026 (автопродление cert-manager),8/8 подов.
+SMTP `mail.hosting.reg.ru:587` (auth healthz smtp:true). Бэкапы: cron 04:00
+(`deploy/k8s/backup.sh`, лог /var/log/pp-backup.log). Цены Pro 5000/50000.
+
+**Открытые направления (по приоритету):**
+1. Форма ЮKassa → ключи → `pp-config` → rollout billing → webhook →
+   тестовый платёж (без ключей checkout не работает).
+2. Push 8 коммитов (по согласованию).
+3. Идентификация домена .ru через Госуслуги (предупреждение reg.ru;
+   продление 08.09.2027).
+4. Юр.просмотр оферты `/legal/terms.html`.
+5. Offsite-бэкапы: нужен внешний S3 (`PP_OFFSITE_*` готовы).
+6. Drill-восстановления из бэкапа (restore ни разу не проверялся).
+7. Мониторинг/алерты healthz; UI участников (F-19 API есть, экрана нет);
+   iOS IAP (ждёт Apple-аккаунт).
+
+**Навыки сеанса:** Pdf-фикс §5 (baseline-семантика pdf_writer), SMTP через
+хостинг, ispmanager-панель u3638907 (server125), k3s + Traefik edge;
+Read-инструмент периодически отдаёт чужие картинки — проверять пикселями.
