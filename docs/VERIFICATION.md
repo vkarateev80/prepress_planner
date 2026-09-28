@@ -345,3 +345,58 @@ baseline): пробы `readiness`/`liveness` на `/healthz` не задают
 поднять `timeoutSeconds` до 3–5 в манифестах проб и/или разгрузить
 healthz (кэш статуса storage), алерты — на уже установленный prometheus
 (ns `monitoring`, age 4d9h).
+
+## 12. Регистрация с подтверждением почты и телефона (2026-09-28)
+
+Задача заказчика: при регистрации — подтверждение телефона и верификация
+почты. Решения (выбраны владельцем): **двухфазная** схема
+register → confirm; SMS — **сначала dev-режим** (каркас под провайдера);
+существующие аккаунты — **помечены подтверждёнными**.
+
+### 12.1 Контракт (services/auth v0.4.0)
+
+| Шаг | Вызов | Результат |
+|---|---|---|
+| 1 | `POST /auth/register {email, password, phone, org_name?}` | **202** `{pending, email, phone, dev_email_code?, dev_phone_code?, sms_sent}` — сессии нет; приглашения/организация создаются сразу |
+| 2 | `POST /auth/confirm {email, email_code, phone_code}` | **201** `{token, user, orgs}`; `400` неверный код (отдельно почта/телефон), `404` нет регистрации, `409` уже подтверждён |
+| 3 | `POST /auth/confirm/resend {email, channel}` | `200 {ok}` (+dev-коды); `429` кулдаун `PP_RESEND_COOLDOWN` (60 с) |
+| — | `POST /auth/login` до confirm | **403** «Аккаунт не подтверждён…» |
+
+- Коды: 6 цифр, TTL `PP_RESET_TTL` (30 мин), в БД только sha256
+  (`verify_codes`, свежий вытесняет предыдущий). Неверный код одного
+  канала **не погашает** второй (проверка без погашения, погашение — после
+  обоих).
+- Доставка: email — существующий SMTP (без SMTP — `dev_email_code` в
+  ответе, паттерн invites); телефон — `PP_SMS_PROVIDER=dev` (по умолчанию):
+  реальной отправки нет, код в `dev_phone_code`; точка подключения
+  провайдера — `_send_sms` (+ DEPLOY_CHECKLIST «Внешние действия», п.5).
+- Миграция: `users.phone/email_verified_at/phone_verified_at` +
+  `verify_codes` (одноразовый backfill при добавлении колонок —
+  существующие 7 аккаунтов прода подтверждены, новые — нет; при рестарте
+  backfill не повторяется — он внутри `if "phone" not in cols`).
+- Нормализация телефона: `8…`/`7…`/`+7…` → `+7XXXXXXXXXX`, иначе 422.
+
+### 12.2 Клиент (app)
+
+- `AccountGateway`/`AuthApi`: `register` → `RegisterPending` (202),
+  `confirm` → сессия (201), `confirmResend`; `_post` принимает любые 2xx.
+- `LicenseController`: `register(email, password, phone)` → record с
+  dev-кодами + `needsConfirm`; `confirm(codes)` → сессия; `resendConfirm`;
+  `login` при 403 выставляет `needsConfirm` (экран сразу показывает ввод
+  кодов); `cancelConfirm`.
+- `AccountScreen`: в режиме регистрации — поле «Телефон»; шаг
+  «Подтверждение регистрации» — два кода, кнопки переотправки (почта/SMS),
+  dev-коды выводятся в сообщении; назад ко входу.
+
+### 12.3 Прогоны (фактические)
+
+- `pytest services/{converter,auth,payments,api,license}/tests` —
+  **161 passed, 1 skipped** (было 157: +4 — pending/cooldown/422/healthz;
+  все прежние переведены на двухфазный хелпер `_register`).
+- `flutter analyze` — 0; `flutter test` — **52/52** (+2: HTTP-контракт
+  202/201 и 403→needsConfirm); `flutter build web --release` — OK.
+- `docker compose config` (с `PP_AUTH_SECRET`-плейсхолдером) — OK;
+  `kubectl apply --dry-run=client` для изменённых `01-config.yaml` /
+  `20-auth.yaml` — OK.
+- Прод не откатывался: деплой манифестов/образа — отдельным шагом
+  (согласование владельца).

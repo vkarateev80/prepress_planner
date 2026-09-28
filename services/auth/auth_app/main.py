@@ -22,11 +22,28 @@ Legacy `services/license` (machine-id, офлайн-токены) в SaaS-пут
 возвращается в ответе (в т.ч. в dev-режиме без SMTP) и не раскрывается факт
 существования email. POST /auth/reset меняет пароль и отзывает все сессии.
 
+Регистрация двухфазная (подтверждение почты и телефона):
+  POST /auth/register {email, password, phone, org_name?, device_id?} → 202
+      создаёт пользователя БЕЗ сессии (email_verified_at/phone_verified_at
+      NULL) и шлёт два 6-значных кода: на email (SMTP) и на телефон (SMS).
+      Коды в БД только sha256, TTL = PP_RESET_TTL. Код в ответе появляется
+      только когда канал доставки недоступен: dev_email_code — без SMTP,
+      dev_phone_code — при PP_SMS_PROVIDER=dev (пока реального SMS нет).
+  POST /auth/confirm {email, email_code, phone_code, device_id?} → 201
+      сверяет оба кода, помечает аккаунт подтверждённым и выдаёт сессию
+      (payload как у прежнего register: {token, user, orgs}).
+  POST /auth/confirm/resend {email, channel: email|phone} → {ok}
+      переотправка кода (кулдаун PP_RESEND_COOLDOWN, дефолт 60 с).
+  POST /auth/login — 403, пока аккаунт не подтверждён.
+
 Зависимости: стандартная библиотека Python + fastapi/pydantic (+uvicorn для
 запуска). Почта — smtplib/email из stdlib. Внешних пакетов для логики нет.
 
 API:
-  POST /auth/register          {email, password, org_name?}  → 201 {token, user, orgs}
+  POST /auth/register          {email, password, phone, org_name?} → 202 pending
+  POST /auth/confirm           {email, email_code, phone_code, device_id?}
+                                                              → 201 {token, user, orgs}
+  POST /auth/confirm/resend    {email, channel}               → {ok, dev_*_code?}
   POST /auth/login             {email, password, device_id?} → {token, user, orgs}
   POST /auth/logout            (Bearer)                      → {ok, user_id}
   GET  /auth/me                (Bearer)                      → {user, orgs, memberships}
@@ -54,6 +71,9 @@ env:
                      личную организацию; 0 = пользователь без организации
   PP_SMTP_HOST/PORT/USER/PASSWORD/FROM — почта для сброса (STARTTLS 587)
   PP_SMTP_SSL      — 1 = сразу TLS (465)
+  PP_SMS_PROVIDER  — dev (по умолчанию): SMS не отправляется, код в ответе
+                     register/resend; точка подключения реального провайдера
+  PP_RESEND_COOLDOWN — кулдаун переотправки кода подтверждения, с (60)
 """
 import hashlib
 import hmac
@@ -90,6 +110,11 @@ INVITE_TTL_S = 7 * 86400  # приглашения в организацию: 7 
 # Регистрация без org_name: 1 — создаём личную организацию (по умолчанию),
 # 0 — пользователь без организации (memberships добавляются позже).
 DEFAULT_ORG = os.environ.get("PP_DEFAULT_ORG", "1").strip() != "0"
+# SMS: dev (по умолчанию) — реальной отправки нет, код в ответе register/
+# resend; провайдер подключается здесь же (см. _send_sms).
+SMS_PROVIDER = os.environ.get("PP_SMS_PROVIDER", "dev").strip() or "dev"
+RESEND_COOLDOWN_S = float(
+    os.environ.get("PP_RESEND_COOLDOWN", "60").strip() or 60)
 
 ROLES = ("owner", "admin", "member", "viewer")
 ADMIN_ROLES = ("owner", "admin")
@@ -102,6 +127,17 @@ _EMAIL_RE = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 def _check_email(email: str):
     if not re.match(_EMAIL_RE, email):
         raise HTTPException(status_code=422, detail="Некорректный email")
+
+
+def _check_phone(phone: str) -> str:
+    """Нормализация к +7XXXXXXXXXX; иначе 422. Принимает 8…, 7…, +7…."""
+    digits_only = re.sub(r"\D", "", phone)
+    if len(digits_only) == 11 and digits_only.startswith("8"):
+        digits_only = "7" + digits_only[1:]
+    if len(digits_only) != 11 or not digits_only.startswith("7"):
+        raise HTTPException(
+            status_code=422, detail="Некорректный номер телефона")
+    return "+" + digits_only
 
 
 def _connect() -> sqlite3.Connection:
@@ -194,12 +230,37 @@ def _init_db():
             );
             CREATE INDEX IF NOT EXISTS idx_invites_email
                 ON invites(email);
+            CREATE TABLE IF NOT EXISTS verify_codes (
+                id TEXT PRIMARY KEY,
+                channel TEXT NOT NULL,
+                dest TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                code_hash TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                expires_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_verify_codes_dest
+                ON verify_codes(channel, dest);
             """
         )
         # --- миграция legacy → новая схема (идемпотентно) ---
         user_cols = _columns(conn, "users")
         if "updated_at" not in user_cols:
             conn.execute("ALTER TABLE users ADD COLUMN updated_at REAL")
+        if "phone" not in user_cols:
+            # Одноразово (только при добавлении колонок): телефона нет ни у
+            # кого — но существующие аккаунты считаем уже подтверждёнными,
+            # иначе все юзеры прода потеряют вход. Новые (после этой
+            # миграции) регистрируются с NULL и проходят confirm.
+            conn.execute("ALTER TABLE users ADD COLUMN phone TEXT")
+            conn.execute(
+                "ALTER TABLE users ADD COLUMN email_verified_at REAL")
+            conn.execute(
+                "ALTER TABLE users ADD COLUMN phone_verified_at REAL")
+            conn.execute(
+                "UPDATE users SET email_verified_at = created_at, "
+                "phone_verified_at = created_at "
+                "WHERE email_verified_at IS NULL")
         ses_cols = _columns(conn, "sessions")
         if "revoked_at" not in ses_cols:
             conn.execute("ALTER TABLE sessions ADD COLUMN revoked_at REAL")
@@ -457,13 +518,85 @@ def _use_reset_code(email: str, user_id: str, code: str) -> bool:
         return True
 
 
+def _new_verify_code(channel: str, dest: str, user_id: str) -> str:
+    """Код подтверждения (email|phone): в БД только sha256, свежий
+    вытесняет предыдущий (DELETE по channel+dest)."""
+    code = "".join(secrets.choice(digits) for _ in range(RESET_CODE_LEN))
+    now = time.time()
+    with _db_lock, _connect() as conn:
+        conn.execute(
+            "DELETE FROM verify_codes WHERE channel = ? AND dest = ?",
+            (channel, dest))
+        conn.execute(
+            "INSERT INTO verify_codes (id, channel, dest, user_id, "
+            "code_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (secrets.token_hex(16), channel, dest, user_id, _sha256(code),
+             now, now + RESET_TTL_S))
+    return code
+
+
+def _check_verify_code(channel: str, dest: str, user_id: str,
+                       code: str) -> bool:
+    """Сверка кода подтверждения без погашения (погашение — после того,
+    как проверились ОБА кода: иначе неверный код телефона «сжигал» бы
+    уже введённый код почты)."""
+    now = time.time()
+    with _db_lock, _connect() as conn:
+        row = conn.execute(
+            "SELECT code_hash, expires_at FROM verify_codes "
+            "WHERE channel = ? AND dest = ? AND user_id = ? "
+            "ORDER BY created_at DESC LIMIT 1",
+            (channel, dest, user_id)).fetchone()
+        if row is None or row["expires_at"] < now:
+            return False
+        return hmac.compare_digest(row["code_hash"], _sha256(code))
+
+
+def _verify_send_age(channel: str, dest: str) -> float:
+    """Возраст последней отправки (с) или +inf, если отправок не было."""
+    with _db_lock, _connect() as conn:
+        row = conn.execute(
+            "SELECT created_at FROM verify_codes "
+            "WHERE channel = ? AND dest = ? "
+            "ORDER BY created_at DESC LIMIT 1",
+            (channel, dest)).fetchone()
+    if row is None:
+        return float("inf")
+    return time.time() - row["created_at"]
+
+
+def _send_sms(phone: str, code: str) -> bool:
+    """Отправка SMS-кода подтверждения. Возвращает True, если отправлено.
+
+    PP_SMS_PROVIDER=dev (по умолчанию) — реальной отправки нет: код
+    возвращается клиенту в dev_phone_code. Точка подключения реального
+    провайдера (PP_SMS_PROVIDER=sms_ru|…): POST с PP_SMS_* — здесь.
+    """
+    if SMS_PROVIDER == "dev":
+        return False
+    raise RuntimeError(f"SMS-провайдер не реализован: {SMS_PROVIDER}")
+
+
 # ---------- модели ----------
 
 class RegisterIn(BaseModel):
     email: str = Field(min_length=3, max_length=254)
     password: str = Field(min_length=6, max_length=128)
+    phone: str = Field(min_length=10, max_length=20)
     org_name: Optional[str] = Field(default=None, max_length=200)
     device_id: Optional[str] = Field(default=None, max_length=128)
+
+
+class ConfirmIn(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    email_code: str = Field(min_length=RESET_CODE_LEN, max_length=RESET_CODE_LEN)
+    phone_code: str = Field(min_length=RESET_CODE_LEN, max_length=RESET_CODE_LEN)
+    device_id: Optional[str] = Field(default=None, max_length=128)
+
+
+class ConfirmResendIn(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    channel: str = Field(pattern="^(email|phone)$")
 
 
 class LoginIn(BaseModel):
@@ -508,7 +641,7 @@ async def _lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Препресс-Планер: авторизация", version="0.3.0",
+app = FastAPI(title="Препресс-Планер: авторизация", version="0.4.0",
               lifespan=_lifespan)
 
 _init_db()
@@ -533,16 +666,18 @@ def _create_user(conn, email: str, password: str) -> str:
     return user_id
 
 
-@app.post("/auth/register", status_code=201)
+@app.post("/auth/register", status_code=202)
 def register(body: RegisterIn):
-    """Регистрация: пользователь + (опционально) организация с ролью owner.
+    """Фаза 1 регистрации: пользователь + организация БЕЗ сессии.
 
-    org_name передан → организация создаётся; не передан → личная
-    организация (PP_DEFAULT_ORG=1) либо пользователь без организации.
-    Возвращает серверную сессию (мультисессии разрешены).
+    Создаёт аккаунт (неподтверждённый), применяет приглашения и шлёт
+    два кода подтверждения: на email (SMTP) и на телефон (SMS, пока
+    PP_SMS_PROVIDER=dev — код в ответе). Сессия выдаётся только в
+    POST /auth/confirm.
     """
     email = body.email.lower().strip()
     _check_email(email)
+    phone = _check_phone(body.phone)
     org_name = (body.org_name or "").strip() or None
     with _db_lock, _connect() as conn:
         existing = conn.execute(
@@ -551,22 +686,135 @@ def register(body: RegisterIn):
             raise HTTPException(status_code=409,
                                 detail="Email уже зарегистрирован")
         user_id = _create_user(conn, email, body.password)
+        conn.execute("UPDATE users SET phone = ? WHERE id = ?",
+                     (phone, user_id))
         # Автоприём живых приглашений по email — в той же транзакции.
         _apply_invites(conn, email, user_id)
         if org_name is None and DEFAULT_ORG:
             org_name = email
         if org_name is not None:
             _create_org(conn, org_name, user_id, "owner")
-        token = _issue_session(conn, user_id, body.device_id)
+        # Сессию НЕ выдаём: до confirm аккаунтом пользоваться нельзя.
+
+    email_code = _new_verify_code("email", email, user_id)
+    phone_code = _new_verify_code("phone", phone, user_id)
+    resp = {"pending": True, "email": email, "phone": phone}
+
+    smtp = _smtp_config()
+    if smtp is not None:
+        try:
+            _send_email(
+                email,
+                "Подтверждение регистрации — Препресс-Планер",
+                f"Код подтверждения почты: {email_code}\n"
+                f"Код действителен {int(RESET_TTL_MIN)} минут.")
+        except Exception:
+            # Недоступность SMTP не роняет регистрацию (ретраи — в runbook).
+            pass
+    else:
+        resp["dev_email_code"] = email_code  # dev: SMTP не настроен
+
+    try:
+        sms_sent = _send_sms(phone, phone_code)
+    except Exception:
+        sms_sent = False
+    resp["sms_sent"] = sms_sent
+    if not sms_sent:
+        resp["dev_phone_code"] = phone_code  # PP_SMS_PROVIDER=dev
+    return resp
+
+
+@app.post("/auth/confirm", status_code=201)
+def confirm(body: ConfirmIn):
+    """Фаза 2: сверка обоих кодов → аккаунт подтверждён → сессия."""
+    email = body.email.lower().strip()
+    _check_email(email)
+    with _db_lock, _connect() as conn:
         row = conn.execute(
-            "SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
-        orgs = _orgs_of(conn, user_id)
+            "SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+        if row is None:
+            # Регистрация не начиналась — не раскрываем существование.
+            raise HTTPException(status_code=404,
+                                detail="Регистрация не найдена")
+        if row["email_verified_at"] is not None:
+            raise HTTPException(status_code=409,
+                                detail="Аккаунт уже подтверждён")
+        if not _check_verify_code("email", email, row["id"], body.email_code):
+            raise HTTPException(status_code=400,
+                                detail="Неверный или истёкший код почты")
+        if not _check_verify_code("phone", row["phone"], row["id"],
+                                  body.phone_code):
+            raise HTTPException(status_code=400,
+                                detail="Неверный или истёкший код телефона")
+        now = time.time()
+        conn.execute("DELETE FROM verify_codes WHERE user_id = ?",
+                     (row["id"],))
+        conn.execute(
+            "UPDATE users SET email_verified_at = ?, phone_verified_at = ?, "
+            "updated_at = ? WHERE id = ?",
+            (now, now, now, row["id"]))
+        token = _issue_session(conn, row["id"], body.device_id)
+        orgs = _orgs_of(conn, row["id"])
+        row = conn.execute(
+            "SELECT * FROM users WHERE id = ?", (row["id"],)).fetchone()
     return {"token": token, "user": _user_row(row), "orgs": _orgs_brief(orgs)}
+
+
+@app.post("/auth/confirm/resend")
+def confirm_resend(body: ConfirmResendIn):
+    """Переотправка кода подтверждения (кулдаун PP_RESEND_COOLDOWN).
+
+    Ответ одноразово-успешный ({ok: true}) — существование email не
+    раскрывается; dev_*_code появляется только когда отправили и канал
+    dev (без SMTP / PP_SMS_PROVIDER=dev).
+    """
+    email = body.email.lower().strip()
+    _check_email(email)
+    with _db_lock, _connect() as conn:
+        row = conn.execute(
+            "SELECT id, phone FROM users WHERE email = ?",
+            (email,)).fetchone()
+    if row is None:
+        return {"ok": True}  # тихий no-op
+    dest = email if body.channel == "email" else (row["phone"] or "")
+    if not dest:
+        return {"ok": True}
+    if _verify_send_age(body.channel, dest) < RESEND_COOLDOWN_S:
+        raise HTTPException(
+            status_code=429,
+            detail="Слишком часто. Повторите попытку позже.")
+    code = _new_verify_code(body.channel, dest, row["id"])
+    resp = {"ok": True}
+    if body.channel == "email":
+        smtp = _smtp_config()
+        if smtp is not None:
+            try:
+                _send_email(
+                    email,
+                    "Подтверждение регистрации — Препресс-Планер",
+                    f"Код подтверждения почты: {code}\n"
+                    f"Код действителен {int(RESET_TTL_MIN)} минут.")
+            except Exception:
+                pass
+        else:
+            resp["dev_email_code"] = code
+    else:
+        try:
+            sms_sent = _send_sms(dest, code)
+        except Exception:
+            sms_sent = False
+        resp["sms_sent"] = sms_sent
+        if not sms_sent:
+            resp["dev_phone_code"] = code
+    return resp
 
 
 @app.post("/auth/login")
 def login(body: LoginIn):
-    """Вход: новая серверная сессия; прежние сессии НЕ вытесняются."""
+    """Вход: новая серверная сессия; прежние сессии НЕ вытесняются.
+
+    Неподтверждённый аккаунт (двухфазная регистрация) — 403.
+    """
     email = body.email.lower().strip()
     _check_email(email)
     with _db_lock, _connect() as conn:
@@ -576,6 +824,10 @@ def login(body: LoginIn):
                                                row["password_hash"]):
             raise HTTPException(status_code=401,
                                 detail="Неверный email или пароль")
+        if row["email_verified_at"] is None:
+            raise HTTPException(
+                status_code=403,
+                detail="Аккаунт не подтверждён. Введите коды с почты и из SMS.")
         token = _issue_session(conn, row["id"], body.device_id)
         orgs = _orgs_of(conn, row["id"])
     return {"token": token, "user": _user_row(row), "orgs": _orgs_brief(orgs)}
@@ -900,4 +1152,4 @@ def healthz():
             "device_policy": "multi", "device_limit": None,
             "multitenant": True, "roles": list(ROLES),
             "default_org": DEFAULT_ORG, "smtp": bool(smtp),
-            "reset_ttl_min": RESET_TTL_MIN}
+            "sms": SMS_PROVIDER, "reset_ttl_min": RESET_TTL_MIN}

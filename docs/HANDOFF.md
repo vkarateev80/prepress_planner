@@ -606,6 +606,9 @@ SMTP `mail.hosting.reg.ru:587` (auth healthz smtp:true). Бэкапы: cron 04:0
    дефолтном `timeoutSeconds: 1` проб → флокают readiness/liveness —
    см. VERIFICATION §11.5); UI участников (F-19 API есть, экрана нет);
    iOS IAP (ждёт Apple-аккаунт).
+8. SMS-провайдер подтверждения телефона (§19): сейчас `PP_SMS_PROVIDER=dev`
+   (код в ответе) — до публичного запуска подключить (DEPLOY_CHECKLIST
+   «Внешние действия» п.5); деплой auth-образа и манифестов на прод.
 
 **Навыки сеанса:** Pdf-фикс §5 (baseline-семантика pdf_writer), SMTP через
 хостинг, ispmanager-панель u3638907 (server125), k3s + Traefik edge;
@@ -637,3 +640,35 @@ Read-инструмент периодически отдаёт чужие ка�
   и `20260928_171733` (с фиксом). Крон 04:00 подхватит новые шаги сам.
 - Остались внешние: offsite S3-бэкет (п.5), ЮKassa-ключи (п.1) и пр.
   (список — §17).
+
+---
+
+## 19. Регистрация с подтверждением почты и телефона (2026-09-28)
+
+Заказчик поставил задачу верификации при регистрации. Решения владельца:
+двухфазная схема register→confirm, SMS — dev-режим до подключения
+провайдера, существующие аккаунты помечены подтверждёнными.
+Подробности и прогоны: `docs/VERIFICATION.md` §12; контракт —
+`services/auth/README.md` (v0.4.0).
+
+**Суть:** `POST /auth/register` (теперь **обязательный `phone`**) → 202
+без сессии + два кода (email по SMTP, телефон — `PP_SMS_PROVIDER=dev`) →
+`POST /auth/confirm` → 201 сессия; `login` до confirm — 403;
+`confirm/resend` с кулдауном 60 с. Клиент: поле телефона и экран
+«Подтверждение регистрации» (`account_screen.dart`, контроллер
+`needsConfirm`). Миграция БД: `users.phone`/`*_verified_at` (одноразовый
+backfill) + таблица `verify_codes`.
+
+**Изменения в дереве (не закоммичены):** services/auth (main.py, tests,
+README), app (account_client, license_controller, account_screen,
+license_account_test), deploy (.env.example, docker-compose, k8s
+01-config/20-auth, DEPLOY_CHECKLIST), docs (VERIFICATION §12, этот файл).
+
+**Прогоны (зелёные):** pytest **161 passed, 1 skipped**; flutter analyze 0,
+test **52/52**, build web OK; `docker compose config` OK; kubectl
+`--dry-run=client` манифестов OK.
+
+**Осталось внешнее:** подключить SMS-провайдер (`_send_sms` +
+`PP_SMS_PROVIDER`, DEPLOY_CHECKLIST «Внешние действия» п.5) — до этого
+на проде dev-режим: SMS-код виден в ответе. Деплой на прод (образ auth +
+применение манифестов) — после санкции владельца.

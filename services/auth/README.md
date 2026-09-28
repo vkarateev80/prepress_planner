@@ -24,8 +24,10 @@ Self-hosted auth «Препресс-Планер» (SaaS): аккаунты emai
 
 | Метод/путь | Запрос | Ответ |
 |---|---|---|
-| `POST /auth/register` | `{email, password, org_name?, device_id?}` | `201 {token, user{id,email}, orgs[{org_id,role}]}` |
-| `POST /auth/login` | `{email, password, device_id?}` | `200 {token, user, orgs[]}` |
+| `POST /auth/register` | `{email, password, phone, org_name?, device_id?}` | `202 {pending:true, email, phone, dev_email_code?, dev_phone_code?, sms_sent}` — сессии НЕТ |
+| `POST /auth/confirm` | `{email, email_code, phone_code, device_id?}` | `201 {token, user{id,email}, orgs[{org_id,role}]}` / `400` неверный код / `404` нет регистрации / `409` уже подтверждён |
+| `POST /auth/confirm/resend` | `{email, channel:"email"\|"phone"}` | `200 {ok:true, dev_*_code?}` / `429` кулдаун |
+| `POST /auth/login` | `{email, password, device_id?}` | `200 {token, user, orgs[]}` / `403` аккаунт не подтверждён |
 | `POST /auth/logout` | Bearer | `200 {ok, user_id}` — отзывается только эта сессия |
 | `GET /auth/me` | Bearer | `200 {user, orgs[], memberships[], session}` |
 | `GET /auth/sessions` | Bearer | `200 {sessions:[{id,device_id,current,created_at,expires_at}], count}` |
@@ -40,15 +42,44 @@ Self-hosted auth «Препресс-Планер» (SaaS): аккаунты emai
 | `POST /auth/verify` | Bearer (внутренний вызов billing/api) | `200 {sub, email, orgs:[{org_id,role}]}` |
 | `POST /auth/forgot` | `{email}` | `200 {ok:true}` — всегда, кода в ответе нет |
 | `POST /auth/reset` | `{email, code, new_password}` | `200 {ok:true}` / `400` код / `404` email |
-| `GET /healthz` | — | статус, `device_policy:"multi"`, `multitenant:true`, `smtp`, TTL |
+| `GET /healthz` | — | статус, `device_policy:"multi"`, `multitenant:true`, `smtp`, `sms`, TTL |
 
-Регистрация: `org_name` передан → создаётся организация, пользователь —
+**Регистрация двухфазная** (подтверждение почты и телефона): `register`
+создаёт пользователя **без сессии** и шлёт два 6-значных кода (TTL =
+`PP_RESET_TTL`, в БД только sha256): на email через SMTP и на телефон
+через SMS (`PP_SMS_PROVIDER`; пока `dev` — реальной отправки нет, код
+возвращается в `dev_phone_code`; без SMTP — также `dev_email_code`).
+`confirm` сверяет оба кода (неверный не «сжигает» второй) и выдаёт
+сессию. `confirm/resend` переотправляет код (кулдаун
+`PP_RESEND_COOLDOWN`, дефолт 60 с). Вход (`login`) до подтверждения —
+`403`.
+
+`org_name` передан → создаётся организация (при `register`), пользователь —
 `owner`. Без `org_name` → личная организация (email как имя) при
 `PP_DEFAULT_ORG=1` (по умолчанию) либо пользователь **без** организации при
 `PP_DEFAULT_ORG=0`. Оба пути поддержаны.
 
-Ошибки: `409` email занят, `422` невалидный email/короткий пароль, `401`
-неверные данные или мёртвый токен, `403` нет доступа к организации.
+Ошибки: `409` email занят / уже подтверждён, `422` невалидный
+email/телефон/короткий пароль, `401` неверные данные или мёртвый токен,
+`403` нет доступа к организации или аккаунт не подтверждён.
+
+## Подтверждение регистрации (почта + телефон)
+
+`register` → 202 `pending`: создаётся пользователь (`phone`,
+`email_verified_at`/`phone_verified_at` = NULL), применяются приглашения и
+создаётся организация — но **сессии нет**. Коды (6 цифр, TTL `PP_RESET_TTL`)
+хранятся в `verify_codes` (sha256, свежий вытесняет предыдущий по
+`channel+dest`).
+
+Доставка: email — SMTP (как при сбросе); телефон — `PP_SMS_PROVIDER`:
+`dev` (по умолчанию) реальной отправки нет, код возвращается в
+`dev_phone_code` (точка подключения реального провайдера — `_send_sms`).
+Если SMTP не настроен — `dev_email_code` тоже в ответе (паттерн invites).
+
+`confirm` сверяет ОБА кода без погашения, затем погашает их, ставит
+verified-метки и выдаёт сессию. `confirm/resend` — переотправка с
+кулдауном `PP_RESEND_COOLDOWN` (429). Существующие на момент миграции
+аккаунты помечаются подтверждёнными автоматически (одноразовый backfill).
 
 ## Сброс пароля
 
@@ -66,13 +97,16 @@ Self-hosted auth «Препресс-Планер» (SaaS): аккаунты emai
 ## Модель данных (SQLite)
 
 ```
-users(id, email UNIQUE, password_hash, created_at, updated_at)
+users(id, email UNIQUE, password_hash, created_at, updated_at,
+      phone, email_verified_at, phone_verified_at)
 organizations(id, name, created_by, created_at, updated_at)
 memberships(id, org_id, user_id, role, invited_by, created_at,
             UNIQUE(org_id,user_id))
 sessions(token_hash PK sha256, user_id, device_id NULL, created_at,
          expires_at, revoked_at, meta)
 reset_codes(email, user_id, code_hash sha256, created_at, expires_at, used)
+verify_codes(id PK, channel 'email'|'phone', dest, user_id,
+             code_hash sha256, created_at, expires_at)
 ```
 
 ### Миграция с legacy-БД (v0.2)
@@ -81,9 +115,13 @@ reset_codes(email, user_id, code_hash sha256, created_at, expires_at, used)
 `users.updated_at`, `sessions.revoked_at/meta`, `reset_codes.user_id`
 (с обратным заполнением по email), создаёт `organizations`/`memberships` и
 снимает legacy `NOT NULL` с `sessions.device_id` (пересоздание таблицы с
-копированием строк). Существующие пользователи, сессии и коды сброса
-продолжают работать; до появления своей организации пользователь просто не
-имеет memberships (организацию можно создать через `POST /auth/orgs`).
+копированием строк). При добавлении колонок подтверждения (`phone`,
+`email_verified_at`, `phone_verified_at` — одноразово) существующие
+пользователи помечаются подтверждёнными (иначе потеряли бы вход);
+новые после миграции регистрируются неподтверждёнными. Существующие
+пользователи, сессии и коды сброса продолжают работать; до появления
+своей организации пользователь просто не имеет memberships (организацию
+можно создать через `POST /auth/orgs`).
 Резервная копия перед обновлением прода — обязательна (см. runbook).
 
 ## env
@@ -95,8 +133,10 @@ reset_codes(email, user_id, code_hash sha256, created_at, expires_at, used)
 | `PP_TOKEN_TTL` | `720` | Срок сессии, часы (30 дней) |
 | `PP_RESET_TTL` | `30` | Срок кода сброса, минуты |
 | `PP_DEFAULT_ORG` | `1` | `1` — регистрация без `org_name` создаёт личную организацию; `0` — пользователь без организации |
-| `PP_SMTP_HOST/PORT/USER/PASSWORD/FROM` | — | Почта для сброса (SMTP) |
+| `PP_SMTP_HOST/PORT/USER/PASSWORD/FROM` | — | Почта для сброса и подтверждения (SMTP) |
 | `PP_SMTP_SSL` | пусто | `1` = TLS сразу (порт 465) |
+| `PP_SMS_PROVIDER` | `dev` | `dev` — SMS не отправляется, код в ответе; точка подключения реального провайдера |
+| `PP_RESEND_COOLDOWN` | `60` | Кулдаун переотправки кода подтверждения, секунд |
 
 ## Локальный запуск
 
@@ -120,11 +160,14 @@ docker run -p 8121:8121 -e PP_AUTH_SECRET=... -v auth-data:/srv/auth/data pp-aut
 python -m pytest tests -q
 ```
 
-Покрыто: healthz, регистрация с/без организации, роли и memberships,
+Покрыто: healthz, двухфазная регистрация (register → confirm: 403 до
+подтверждения, неверные коды, повторный confirm 409, кулдаун resend 429),
+регистрация с/без организации, роли и memberships,
 мультисессии (отсутствие вытеснения), отзыв сессии по id, logout,
 forgot/reset (без `dev_code`, одноразовость, отзыв всех сессий),
 `/auth/verify` с `orgs`, формат парольного хеша (pbkdf2 200k), sha256
-токенов в БД, миграция legacy-БД, приглашения участников (F-19: список,
+токенов в БД, миграция legacy-БД (в т.ч. backfill подтверждений),
+приглашения участников (F-19: список,
 добавление/invite, accept, автоприём при регистрации, удаление, защита
 последнего owner).
 

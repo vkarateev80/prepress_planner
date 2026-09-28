@@ -61,10 +61,25 @@ def _auth(token: str) -> dict:
 
 
 def _register(email: str, password: str = "secret1", **extra) -> dict:
+    """Двухфазная регистрация: register (202) → confirm (201) → сессия.
+
+    dev-коды (SMTP нет, PP_SMS_PROVIDER=dev) приходят в ответе register.
+    """
+    _counter["n"] += 1
+    phone = f"+7999{_counter['n']:07d}"
     r = client.post("/auth/register",
-                    json={"email": email, "password": password, **extra})
-    assert r.status_code == 201, r.text
-    return r.json()
+                    json={"email": email, "password": password,
+                          "phone": phone, **extra})
+    assert r.status_code == 202, r.text
+    pending = r.json()
+    assert pending["pending"] is True
+    rc = client.post("/auth/confirm", json={
+        "email": email,
+        "email_code": pending.get("dev_email_code", ""),
+        "phone_code": pending.get("dev_phone_code", ""),
+    })
+    assert rc.status_code == 201, rc.text
+    return rc.json()
 
 
 def test_healthz():
@@ -108,14 +123,25 @@ def test_register_duplicate_email_409_and_bad_input():
     email = _email("dup")
     _register(email)
     r = client.post("/auth/register",
-                    json={"email": email, "password": "secret1"})
+                    json={"email": email, "password": "secret1",
+                          "phone": "+79991234567"})
     assert r.status_code == 409
 
     r = client.post("/auth/register",
-                    json={"email": "not-an-email", "password": "secret1"})
+                    json={"email": "not-an-email", "password": "secret1",
+                          "phone": "+79991234567"})
     assert r.status_code == 422
     r = client.post("/auth/register",
-                    json={"email": "a@b.co", "password": "123"})
+                    json={"email": "a@b.co", "password": "123",
+                          "phone": "+79991234567"})
+    assert r.status_code == 422
+    # Обязательный телефон: пропущен → 422; мусор вместо номера → 422.
+    r = client.post("/auth/register",
+                    json={"email": _email("nophone"), "password": "secret1"})
+    assert r.status_code == 422
+    r = client.post("/auth/register",
+                    json={"email": _email("badphone"), "password": "secret1",
+                          "phone": "12345678901"})
     assert r.status_code == 422
 
 
@@ -250,11 +276,18 @@ def test_register_without_org_when_default_org_disabled():
         "from auth_app.main import app;"
         "c = TestClient(app);"
         "r = c.post('/auth/register', json={'email':'solo@example.com',"
-        "'password':'secret1'});"
-        "print(r.status_code, r.json()['orgs']);"
+        "'password':'secret1','phone':'+79990000001'});"
+        "assert r.status_code == 202, r.text;"
+        "p = r.json();"
+        "c2 = c.post('/auth/confirm', json={'email':'solo@example.com',"
+        "'email_code':p['dev_email_code'],'phone_code':p['dev_phone_code']});"
+        "print(c2.status_code, c2.json()['orgs']);"
         "r2 = c.post('/auth/register', json={'email':'team@example.com',"
-        "'password':'secret1','org_name':'Team'});"
-        "print(r2.status_code, len(r2.json()['orgs']), r2.json()['orgs'][0]['role']);"
+        "'password':'secret1','phone':'+79990000002','org_name':'Team'});"
+        "p2 = r2.json();"
+        "c3 = c.post('/auth/confirm', json={'email':'team@example.com',"
+        "'email_code':p2['dev_email_code'],'phone_code':p2['dev_phone_code']});"
+        "print(c3.status_code, len(c3.json()['orgs']), c3.json()['orgs'][0]['role']);"
     )
     out = subprocess.run([sys.executable, "-c", code], cwd=str(ROOT), env=env,
                          capture_output=True, text=True)
@@ -472,6 +505,9 @@ def test_legacy_db_migration_keeps_data():
         "print(c.execute('SELECT device_id FROM sessions').fetchone()[0]);"
         "print(c.execute('SELECT COUNT(*) FROM users').fetchone()[0]);"
         "print(c.execute('SELECT user_id FROM reset_codes').fetchone()[0]);"
+        "print(c.execute('SELECT COUNT(*) FROM users WHERE "
+        "email_verified_at IS NOT NULL AND phone_verified_at IS NOT NULL')"
+        ".fetchone()[0]);"
     )
     out = subprocess.run([sys.executable, "-c", code], cwd=str(ROOT),
                          env=env, capture_output=True, text=True)
@@ -479,11 +515,12 @@ def test_legacy_db_migration_keeps_data():
     lines = out.stdout.strip().splitlines()
     tables = set(lines[0].strip("[]").replace("'", "").split(", "))
     assert {"users", "organizations", "memberships", "sessions",
-            "reset_codes"} <= tables
+            "reset_codes", "verify_codes"} <= tables
     assert lines[1] == "1"                      # сессия сохранена
     assert lines[2] == "old-device"             # device_id сохранён
     assert lines[3] == "1"                      # пользователь сохранён
     assert lines[4] == "legacy-user"            # reset_codes связан с юзером
+    assert lines[5] == "1"                      # legacy-юзер подтверждён
 
 
 # ---------- участники и приглашения (F-19, HANDOFF §9 п.5) ----------
@@ -772,3 +809,116 @@ def test_delete_member_and_last_owner_409():
     r = client.delete(f"/auth/orgs/{org_id}/members/{owner['user']['id']}",
                       headers=_auth(owner["token"]))
     assert r.status_code == 200 and r.json() == {"ok": True}
+
+
+# ---------- двухфазная регистрация: confirm / resend ----------
+
+def test_register_pending_requires_confirm_before_login():
+    """register → 202 без сессии; вход до confirm — 403; confirm → сессия."""
+    email = _email("pending")
+    phone = "+79997770001"
+    r = client.post("/auth/register", json={
+        "email": email, "password": "secret1", "phone": phone})
+    assert r.status_code == 202, r.text
+    body = r.json()
+    assert body["pending"] is True
+    assert body["email"] == email and body["phone"] == phone
+    assert "token" not in body                       # сессии нет
+    # dev-режимы: SMTP нет → код почты в ответе; SMS_PROVIDER=dev → код SMS.
+    assert len(body.get("dev_email_code", "")) == 6
+    assert len(body.get("dev_phone_code", "")) == 6
+    assert body["sms_sent"] is False
+
+    # Вход до подтверждения — 403 с русским текстом.
+    r = client.post("/auth/login", json={
+        "email": email, "password": "secret1"})
+    assert r.status_code == 403
+    assert "не подтверждён" in r.json()["detail"]
+
+    # Неверный код почты → 400; код телефона при этом НЕ погашается.
+    r = client.post("/auth/confirm", json={
+        "email": email, "email_code": "000000",
+        "phone_code": body["dev_phone_code"]})
+    assert r.status_code == 400 and "почты" in r.json()["detail"]
+    # Неверный код телефона → 400.
+    r = client.post("/auth/confirm", json={
+        "email": email, "email_code": body["dev_email_code"],
+        "phone_code": "000000"})
+    assert r.status_code == 400 and "телефона" in r.json()["detail"]
+
+    # Оба кода верны → 201 сессия.
+    r = client.post("/auth/confirm", json={
+        "email": email, "email_code": body["dev_email_code"],
+        "phone_code": body["dev_phone_code"]})
+    assert r.status_code == 201, r.text
+    token = r.json()["token"]
+    assert client.get("/auth/me", headers=_auth(token)).status_code == 200
+
+    # Повторный confirm — 409; теперь и вход работает.
+    r = client.post("/auth/confirm", json={
+        "email": email, "email_code": body["dev_email_code"],
+        "phone_code": body["dev_phone_code"]})
+    assert r.status_code == 409
+    assert client.post("/auth/login", json={
+        "email": email, "password": "secret1"}).status_code == 200
+
+
+def test_confirm_unknown_email_404_and_bad_codes_shape():
+    r = client.post("/auth/confirm", json={
+        "email": _email("ghost2"), "email_code": "123456",
+        "phone_code": "123456"})
+    assert r.status_code == 404
+    # Неполный код (не 6 знаков) — 422.
+    email = _email("shape")
+    r = client.post("/auth/register", json={
+        "email": email, "password": "secret1", "phone": "+79997770002"})
+    r = client.post("/auth/confirm", json={
+        "email": email, "email_code": "123", "phone_code": "123456"})
+    assert r.status_code == 422
+
+
+def test_confirm_resend_cooldown_and_invalidates_old_code():
+    """Кулдаун PP_RESEND_COOLDOWN (429); свежий код вытесняет старый."""
+    email = _email("resend")
+    phone = "+79997770003"
+    r = client.post("/auth/register", json={
+        "email": email, "password": "secret1", "phone": phone})
+    body = r.json()
+    old_email_code = body["dev_email_code"]
+
+    # Сразу после register — кулдаун.
+    r = client.post("/auth/confirm/resend",
+                    json={"email": email, "channel": "email"})
+    assert r.status_code == 429
+    r = client.post("/auth/confirm/resend",
+                    json={"email": email, "channel": "phone"})
+    assert r.status_code == 429
+
+    # «Прошло время»: старим created_at в verify_codes.
+    conn = sqlite3.connect(str(Path(os.environ["PP_DATA_DIR"]) / "auth.db"))
+    conn.execute("UPDATE verify_codes SET created_at = ? WHERE dest = ?",
+                 (time.time() - 120, email))
+    conn.commit()
+    conn.close()
+
+    r = client.post("/auth/confirm/resend",
+                    json={"email": email, "channel": "email"})
+    assert r.status_code == 200, r.text
+    new_code = r.json()["dev_email_code"]
+    assert len(new_code) == 6 and new_code != old_email_code
+
+    # Старый код больше не действует, новый — работает (сверяем только почту:
+    # phone-код лежит в pending и валиден).
+    r = client.post("/auth/confirm", json={
+        "email": email, "email_code": old_email_code,
+        "phone_code": body["dev_phone_code"]})
+    assert r.status_code == 400
+    # Resend неизвестного email — тихий {ok: true} без кода.
+    r = client.post("/auth/confirm/resend", json={
+        "email": _email("ghost3"), "channel": "email"})
+    assert r.status_code == 200 and r.json() == {"ok": True}
+
+
+def test_healthz_reports_sms_provider():
+    body = client.get("/healthz").json()
+    assert body["sms"] == "dev"

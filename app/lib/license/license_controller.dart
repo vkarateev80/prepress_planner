@@ -48,6 +48,12 @@ class LicenseController extends ChangeNotifier {
   bool get loggedIn => _session != null;
   String? get accountEmail => _session?.email;
 
+  /// Email в процессе подтверждения регистрации (двухфазная регистрация):
+  /// не null после register (фаза 1) или после входа с 403 «не подтверждён».
+  String? _pendingEmail;
+  String? get pendingEmail => _pendingEmail;
+  bool get needsConfirm => _pendingEmail != null;
+
   /// Bearer-токен сессии (для облачных вызовов, например `/api/projects`).
   String? get sessionToken => _session?.token;
 
@@ -125,6 +131,8 @@ class LicenseController extends ChangeNotifier {
 
   /// Вход в аккаунт (с этого устройства; лимит 1/1 — прежняя сессия
   /// на другом устройстве будет вытеснена сервером).
+  /// 403 «не подтверждён» переводит контроллер в режим ожидания кодов
+  /// ([needsConfirm] → true).
   Future<String?> login(String email, String password) async {
     final g = gateway;
     if (g == null) return 'Вход недоступен: сервер не настроен';
@@ -135,6 +143,76 @@ class LicenseController extends ChangeNotifier {
       final deviceId = await _deviceIdOrError();
       final session = await g.login(email.trim(), password, deviceId);
       _session = session;
+      _pendingEmail = null;
+      await sessionStore.save(session);
+      await _refreshFromServer();
+      return null;
+    } on ApiException catch (e) {
+      if (e.statusCode == 403) _pendingEmail = email.trim();
+      _accountError = e.toString();
+      return e.toString();
+    } on Exception catch (e) {
+      _accountError = e.toString();
+      return e.toString();
+    } finally {
+      _busy = false;
+      notifyListeners();
+    }
+  }
+
+  /// Регистрация, фаза 1: аккаунт создан, коды отправлены; сессии нет.
+  /// Успех → [needsConfirm] = true, в ответе dev-коды недоступных каналов.
+  Future<({String? error, String? devEmailCode, String? devPhoneCode})>
+      register(String email, String password, String phone) async {
+    final g = gateway;
+    if (g == null) {
+      return (
+        error: 'Регистрация недоступна: сервер не настроен',
+        devEmailCode: null,
+        devPhoneCode: null,
+      );
+    }
+    _busy = true;
+    _accountError = null;
+    notifyListeners();
+    try {
+      final deviceId = await _deviceIdOrError();
+      final res =
+          await g.register(email.trim(), password, phone.trim(), deviceId);
+      _pendingEmail = res.ok ? email.trim() : null;
+      return (
+        error: res.error,
+        devEmailCode: res.devEmailCode,
+        devPhoneCode: res.devPhoneCode,
+      );
+    } on ApiException catch (e) {
+      _accountError = e.toString();
+      return (error: e.toString(), devEmailCode: null, devPhoneCode: null);
+    } on Exception catch (e) {
+      _accountError = e.toString();
+      return (error: e.toString(), devEmailCode: null, devPhoneCode: null);
+    } finally {
+      _busy = false;
+      notifyListeners();
+    }
+  }
+
+  /// Регистрация, фаза 2: оба кода → сессия.
+  Future<String?> confirm(String emailCode, String phoneCode) async {
+    final g = gateway;
+    final email = _pendingEmail;
+    if (g == null || email == null) {
+      return 'Подтверждение недоступно: нет ожидающей регистрации';
+    }
+    _busy = true;
+    _accountError = null;
+    notifyListeners();
+    try {
+      final deviceId = await _deviceIdOrError();
+      final session = await g.confirm(
+          email, emailCode.trim(), phoneCode.trim(), deviceId);
+      _session = session;
+      _pendingEmail = null;
       await sessionStore.save(session);
       await _refreshFromServer();
       return null;
@@ -147,27 +225,34 @@ class LicenseController extends ChangeNotifier {
     }
   }
 
-  /// Регистрация нового аккаунта (с этого устройства).
-  Future<String?> register(String email, String password) async {
+  /// Переотправка кода подтверждения (channel: email | phone).
+  Future<({String? error, String? devEmailCode, String? devPhoneCode})>
+      resendConfirm(String channel) async {
     final g = gateway;
-    if (g == null) return 'Регистрация недоступна: сервер не настроен';
-    _busy = true;
-    _accountError = null;
-    notifyListeners();
-    try {
-      final deviceId = await _deviceIdOrError();
-      final session = await g.register(email.trim(), password, deviceId);
-      _session = session;
-      await sessionStore.save(session);
-      await _refreshFromServer();
-      return null;
-    } on Exception catch (e) {
-      _accountError = e.toString();
-      return e.toString();
-    } finally {
-      _busy = false;
-      notifyListeners();
+    final email = _pendingEmail;
+    if (g == null || email == null) {
+      return (
+        error: 'Переотправка недоступна: нет ожидающей регистрации',
+        devEmailCode: null,
+        devPhoneCode: null,
+      );
     }
+    try {
+      final res = await g.confirmResend(email, channel);
+      return (
+        error: res.error,
+        devEmailCode: res.devEmailCode,
+        devPhoneCode: res.devPhoneCode,
+      );
+    } on Exception catch (e) {
+      return (error: e.toString(), devEmailCode: null, devPhoneCode: null);
+    }
+  }
+
+  /// Отмена ожидания подтверждения (кнопка «Назад ко входу»).
+  void cancelConfirm() {
+    _pendingEmail = null;
+    notifyListeners();
   }
 
   /// Запросить код сброса пароля. Возвращает dev_code (если почта не

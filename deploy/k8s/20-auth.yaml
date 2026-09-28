@@ -74,6 +74,16 @@ spec:
                 configMapKeyRef:
                   name: pp-config
                   key: PP_SMTP_FROM
+            - name: PP_SMS_PROVIDER
+              valueFrom:
+                configMapKeyRef:
+                  name: pp-config
+                  key: PP_SMS_PROVIDER
+            - name: PP_RESEND_COOLDOWN
+              valueFrom:
+                configMapKeyRef:
+                  name: pp-config
+                  key: PP_RESEND_COOLDOWN
           volumeMounts:
             - name: data
               mountPath: /srv/auth/data

@@ -22,3 +22,7 @@ data:
   PP_SMTP_PASSWORD: "Info_Pp2026!"
   PP_SMTP_FROM: "info@prepressplan.ru"
   PP_SMTP_SSL: ""
+  # SMS-подтверждение телефона: dev — реальной отправки нет, код в ответе
+  # register/resend (до подключения провайдера на публичном проде сменить).
+  PP_SMS_PROVIDER: "dev"
+  PP_RESEND_COOLDOWN: "60"

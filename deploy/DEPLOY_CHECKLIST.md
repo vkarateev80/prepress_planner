@@ -4,7 +4,10 @@
 2. Сертификаты TLS: **прод** — `PP_DOMAIN=example.com PP_ACME_EMAIL=admin@example.com bash deploy/nginx/get_prod_certs.sh` (Let's Encrypt, webroot; обновление — `… get_prod_certs.sh renew`, cron `0 3 * * 1`); для стенда — `bash deploy/nginx/gen_dev_certs.sh`. Файлы — `deploy/nginx/certs/fullchain.pem` + `privkey.pem`.
 3. `docker compose up -d --build` из `deploy/`.
 4. Проверить `/healthz`: `curl -sf https://<domain>/healthz`.
-5. Проверить auth: `POST /auth/register` → 201 с `token` + `orgs`.
+5. Проверить auth: `POST /auth/register` `{email,password,phone}` → **202
+   pending** (dev-коды в ответе, если SMTP/SMS dev-режимные), затем
+   `POST /auth/confirm` `{email,email_code,phone_code}` → **201** с
+   `token` + `orgs`; `login` до confirm → 403.
 6. Проверить billing webhook: зарегистрировать `https://<domain>/payments/webhook` в ЮKassa; протестировать checkout + webhook с `YUKASSA_WEBHOOK_SECRET`. Чеки (`receipt`) включены по умолчанию (`YUKASSA_RECEIPT_ENABLED=1`, НДС — `YUKASSA_RECEIPT_VAT_CODE`); автоплатежи — `YUKASSA_SAVE_PAYMENT_METHOD=1` (требует активации сохранения способов оплаты у мерчанта ЮKassa).
 7. Проверить E2E: `POST /api/projects` → upload → `/calculate` → delta = 0.0.
 8. Мониторинг: проверить `/healthz` у каждого сервиса; проверить логи `docker compose logs -f`.
@@ -27,7 +30,12 @@
    проверить сброс пароля и (с F-19) письмо-приглашение.
 4. **Offsite-хранилище**: завести bucket + ключи у S3-провайдера →
    `PP_OFFSITE_*` (п.9), крон.
-5. **iOS IAP (StoreKit) — заблокировано без аккаунта Apple** (HANDOFF §9 п.7).
+5. **SMS-провайдер** (подтверждение телефона при регистрации): получить
+   ключ у провайдера → реализовать `_send_sms` в `services/auth` и
+   задать `PP_SMS_PROVIDER` (+ключи). **До этого на проде `dev`**: SMS
+   реально не отправляется, код виден клиенту в ответе — для публичного
+   запуска обязательна замена.
+6. **iOS IAP (StoreKit) — заблокировано без аккаунта Apple** (HANDOFF §9 п.7).
    Что нужно: macOS + Xcode, Apple Developer Program (годовая подписка),
    приложение/App в App Store Connect с product_id подписки (например,
    `pro_month`), sandbox-тестер. Что уже готово в коде: paywall и

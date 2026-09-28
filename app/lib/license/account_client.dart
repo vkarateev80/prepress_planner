@@ -40,6 +40,26 @@ class AccountSession {
       );
 }
 
+/// Ответ фазы 1 регистрации / переотправки кода подтверждения.
+///
+/// `error == null` — сервер принял запрос (202/200); dev-коды
+/// (`dev_email_code`/`dev_phone_code`) приходят только когда канал
+/// доставки dev-режимный (без SMTP / PP_SMS_PROVIDER=dev).
+class RegisterPending {
+  final String? error;
+  final int statusCode;
+  final String? devEmailCode;
+  final String? devPhoneCode;
+  const RegisterPending({
+    this.error,
+    this.statusCode = 0,
+    this.devEmailCode,
+    this.devPhoneCode,
+  });
+
+  bool get ok => error == null;
+}
+
 /// Состояние подписки с сервера оплаты.
 class ServerSubscription {
   final String? plan;
@@ -113,9 +133,17 @@ class SessionStore {
 
 /// Шлюз аккаунта: auth + payments. В тестах подменяется фейком.
 abstract class AccountGateway {
-  /// Регистрация: email+пароль на устройстве [deviceId] → сессия.
-  Future<AccountSession> register(
-      String email, String password, String deviceId);
+  /// Регистрация, фаза 1: создаёт неподтверждённый аккаунт и запускает
+  /// отправку кодов (email + SMS). Сессию НЕ выдаёт.
+  Future<RegisterPending> register(
+      String email, String password, String phone, String deviceId);
+
+  /// Подтверждение, фаза 2: оба кода верны → сессия.
+  Future<AccountSession> confirm(
+      String email, String emailCode, String phoneCode, String deviceId);
+
+  /// Переотправка кода подтверждения: channel = email | phone.
+  Future<RegisterPending> confirmResend(String email, String channel);
 
   /// Вход на устройстве [deviceId]: старые сессии вытесняются (лимит 1/1).
   Future<AccountSession> login(String email, String password, String deviceId);
@@ -151,9 +179,18 @@ class AccountGatewayHttp implements AccountGateway {
         payments = payments ?? PaymentsApi();
 
   @override
-  Future<AccountSession> register(
-          String email, String password, String deviceId) =>
-      auth.register(email, password, deviceId);
+  Future<RegisterPending> register(
+          String email, String password, String phone, String deviceId) =>
+      auth.register(email, password, phone, deviceId);
+
+  @override
+  Future<AccountSession> confirm(String email, String emailCode,
+          String phoneCode, String deviceId) =>
+      auth.confirm(email, emailCode, phoneCode, deviceId);
+
+  @override
+  Future<RegisterPending> confirmResend(String email, String channel) =>
+      auth.confirmResend(email, channel);
 
   @override
   Future<AccountSession> login(
@@ -213,10 +250,63 @@ class AuthApi {
   String get _base =>
       baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
 
-  Future<AccountSession> register(
-          String email, String password, String deviceId) =>
-      _post('/auth/register',
-          {'email': email, 'password': password, 'device_id': deviceId});
+  Future<RegisterPending> register(
+      String email, String password, String phone, String deviceId) async {
+    try {
+      final resp = await httpJsonPost('$_base/auth/register', json: {
+        'email': email,
+        'password': password,
+        'phone': phone,
+        'device_id': deviceId,
+      }, timeout: _timeout);
+      // Фаза 1 — 202 Accepted (прежний 201 без сессии больше не выдаётся).
+      if (resp.status >= 200 && resp.status < 300) {
+        final j = jsonDecode(resp.text) as Map<String, dynamic>;
+        return RegisterPending(
+          devEmailCode: j['dev_email_code'] as String?,
+          devPhoneCode: j['dev_phone_code'] as String?,
+        );
+      }
+      throw ApiException(_detail(resp.text), statusCode: resp.status);
+    } on ApiException {
+      rethrow;
+    } on TimeoutException {
+      throw _noAnswer;
+    } on NetworkException {
+      throw _unavailable;
+    }
+  }
+
+  Future<AccountSession> confirm(String email, String emailCode,
+      String phoneCode, String deviceId) {
+    return _post('/auth/confirm', {
+      'email': email,
+      'email_code': emailCode,
+      'phone_code': phoneCode,
+      'device_id': deviceId,
+    });
+  }
+
+  Future<RegisterPending> confirmResend(String email, String channel) async {
+    try {
+      final resp = await httpJsonPost('$_base/auth/confirm/resend',
+          json: {'email': email, 'channel': channel}, timeout: _timeout);
+      if (resp.status >= 200 && resp.status < 300) {
+        final j = jsonDecode(resp.text) as Map<String, dynamic>;
+        return RegisterPending(
+          devEmailCode: j['dev_email_code'] as String?,
+          devPhoneCode: j['dev_phone_code'] as String?,
+        );
+      }
+      throw ApiException(_detail(resp.text), statusCode: resp.status);
+    } on ApiException {
+      rethrow;
+    } on TimeoutException {
+      throw _noAnswer;
+    } on NetworkException {
+      throw _unavailable;
+    }
+  }
 
   Future<AccountSession> login(
           String email, String password, String deviceId) =>
@@ -227,7 +317,7 @@ class AuthApi {
     try {
       final resp = await httpJsonPost('$_base$path',
           json: body, timeout: _timeout);
-      // /auth/register отдаёт 201 Created — принимаем любые 2xx.
+      // /auth/confirm отдаёт 201 Created — принимаем любые 2xx.
       if (resp.status >= 200 && resp.status < 300) {
         final j = jsonDecode(resp.text) as Map<String, dynamic>;
         final token = j['token'] as String?;

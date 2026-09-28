@@ -25,10 +25,14 @@ class AccountScreen extends StatefulWidget {
 class _AccountScreenState extends State<AccountScreen> {
   final _emailCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
+  final _phoneCtrl = TextEditingController();
   final _codeCtrl = TextEditingController();
+  final _emailCodeCtrl = TextEditingController();
+  final _smsCodeCtrl = TextEditingController();
   final _newPassCtrl = TextEditingController();
   bool _registerMode = false;
   bool _resetMode = false; // шаг «забыли пароль» (email → код → пароль)
+  bool _confirmMode = false; // шаг подтверждения (два кода: почта + SMS)
   String _message = '';
 
   @override
@@ -42,7 +46,10 @@ class _AccountScreenState extends State<AccountScreen> {
   void dispose() {
     _emailCtrl.dispose();
     _passCtrl.dispose();
+    _phoneCtrl.dispose();
     _codeCtrl.dispose();
+    _emailCodeCtrl.dispose();
+    _smsCodeCtrl.dispose();
     _newPassCtrl.dispose();
     super.dispose();
   }
@@ -57,21 +64,89 @@ class _AccountScreenState extends State<AccountScreen> {
       return;
     }
     setState(() => _message = '');
-    final String? err = _registerMode
-        ? await license.register(email, password)
-        : await license.login(email, password);
+    if (_registerMode) {
+      final phone = _phoneCtrl.text.trim();
+      if (phone.isEmpty) {
+        setState(() => _message = 'Введите номер телефона');
+        return;
+      }
+      final res = await license.register(email, password, phone);
+      if (!mounted) return;
+      if (res.error != null) {
+        setState(() => _message = res.error!);
+        return;
+      }
+      setState(() {
+        _confirmMode = true;
+        _message = _codesMessage(res.devEmailCode, res.devPhoneCode);
+      });
+      return;
+    }
+    final String? err = await license.login(email, password);
     if (!mounted) return;
     if (err == null) {
       setState(() {
-        _message = _registerMode
-            ? 'Аккаунт создан. Добро пожаловать!'
-            : 'Вы вошли.';
+        _message = 'Вы вошли.';
       });
       await Future<void>.delayed(const Duration(milliseconds: 600));
       if (mounted) Navigator.of(context).pop();
+    } else if (license.needsConfirm) {
+      // 403 «аккаунт не подтверждён» → сразу к вводу кодов.
+      setState(() {
+        _confirmMode = true;
+        _message = err;
+      });
     } else {
       setState(() => _message = err);
     }
+  }
+
+  static String _codesMessage(String? devEmail, String? devSms) {
+    final parts = <String>[
+      if (devEmail == null && devSms == null)
+        'Коды отправлены на email и телефон. Введите их ниже.'
+      else ...[
+        if (devEmail != null) 'Код с почты (dev-режим): $devEmail.',
+        if (devSms != null) 'SMS-код (dev-режим): $devSms.',
+        if (devEmail == null) 'Код с почты отправлен на email.',
+        if (devSms == null) 'SMS-код отправлен на телефон.',
+      ],
+    ];
+    return parts.join(' ');
+  }
+
+  /// Шаг подтверждения: оба кода → сессия.
+  Future<void> _doConfirm() async {
+    final ec = _emailCodeCtrl.text.trim();
+    final sc = _smsCodeCtrl.text.trim();
+    if (ec.isEmpty || sc.isEmpty) {
+      setState(() => _message = 'Введите оба кода');
+      return;
+    }
+    setState(() => _message = '');
+    final err = await license.confirm(ec, sc);
+    if (!mounted) return;
+    if (err != null) {
+      setState(() => _message = err);
+      return;
+    }
+    setState(() {
+      _confirmMode = false;
+      _registerMode = false;
+      _message = 'Аккаунт подтверждён. Добро пожаловать!';
+    });
+    await Future<void>.delayed(const Duration(milliseconds: 600));
+    if (mounted) Navigator.of(context).pop();
+  }
+
+  Future<void> _resend(String channel) async {
+    setState(() => _message = 'Отправляем…');
+    final res = await license.resendConfirm(channel);
+    if (!mounted) return;
+    setState(() {
+      _message = res.error ??
+          _codesMessage(res.devEmailCode, res.devPhoneCode);
+    });
   }
 
   /// Шаг 1 сброса: запросить код.
@@ -205,13 +280,16 @@ class _AccountScreenState extends State<AccountScreen> {
         Text(
           _resetMode
               ? 'Сброс пароля'
-              : (_registerMode ? 'Регистрация' : 'Вход'),
+              : (_confirmMode
+                  ? 'Подтверждение регистрации'
+                  : (_registerMode ? 'Регистрация' : 'Вход')),
           textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.titleMedium,
         ),
         const SizedBox(height: 16),
         TextField(
           controller: _emailCtrl,
+          enabled: !_confirmMode,
           keyboardType: TextInputType.emailAddress,
           decoration: const InputDecoration(
               labelText: 'Email',
@@ -219,7 +297,27 @@ class _AccountScreenState extends State<AccountScreen> {
               isDense: true),
         ),
         const SizedBox(height: 12),
-        if (_resetMode) ...[
+        if (_confirmMode) ...[
+          TextField(
+            controller: _emailCodeCtrl,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(
+                labelText: 'Код с почты',
+                border: OutlineInputBorder(),
+                isDense: true),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _smsCodeCtrl,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(
+                labelText: 'SMS-код',
+                helperText: 'Код подтверждения из сообщения',
+                border: OutlineInputBorder(),
+                isDense: true),
+            onSubmitted: (_) => _doConfirm(),
+          ),
+        ] else if (_resetMode) ...[
           TextField(
             controller: _codeCtrl,
             keyboardType: TextInputType.number,
@@ -240,6 +338,18 @@ class _AccountScreenState extends State<AccountScreen> {
             onSubmitted: (_) => _doReset(),
           ),
         ] else ...[
+          if (_registerMode) ...[
+            TextField(
+              controller: _phoneCtrl,
+              keyboardType: TextInputType.phone,
+              decoration: const InputDecoration(
+                  labelText: 'Телефон',
+                  helperText: 'Например, +7 999 123-45-67',
+                  border: OutlineInputBorder(),
+                  isDense: true),
+            ),
+            const SizedBox(height: 12),
+          ],
           TextField(
             controller: _passCtrl,
             obscureText: true,
@@ -256,7 +366,12 @@ class _AccountScreenState extends State<AccountScreen> {
           Text(_message, style: const TextStyle(color: Colors.redAccent)),
         ],
         const SizedBox(height: 16),
-        if (_resetMode)
+        if (_confirmMode)
+          FilledButton(
+            onPressed: lic.busy ? null : _doConfirm,
+            child: const Text('Подтвердить'),
+          )
+        else if (_resetMode)
           FilledButton(
             onPressed: lic.busy ? null : _doReset,
             child: const Text('Сбросить пароль'),
@@ -266,7 +381,29 @@ class _AccountScreenState extends State<AccountScreen> {
             onPressed: lic.busy ? null : _submit,
             child: Text(_registerMode ? 'Создать аккаунт' : 'Войти'),
           ),
-        if (_resetMode)
+        if (_confirmMode) ...[
+          TextButton(
+            onPressed: lic.busy ? null : () => _resend('email'),
+            child: const Text('Код на почту повторно'),
+          ),
+          TextButton(
+            onPressed: lic.busy ? null : () => _resend('phone'),
+            child: const Text('SMS-код повторно'),
+          ),
+          TextButton(
+            onPressed: () {
+              license.cancelConfirm();
+              setState(() {
+                _confirmMode = false;
+                _registerMode = false;
+                _emailCodeCtrl.clear();
+                _smsCodeCtrl.clear();
+                _message = '';
+              });
+            },
+            child: const Text('Назад ко входу'),
+          ),
+        ] else if (_resetMode)
           TextButton(
             onPressed: () => setState(() {
               _resetMode = false;

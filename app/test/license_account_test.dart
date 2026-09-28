@@ -14,22 +14,58 @@ class FakeGateway implements AccountGateway {
   final Map<String, String> users = {}; // email → password
   final Map<String, String> _resetCodes = {}; // email → код
   final Map<String, String> _sessions = {}; // token → email
+  final Set<String> _unverified = {}; // ждут подтверждения
   bool serverDown = false;
   DateTime? _until;
   String? _plan;
   int purchaseCount = 0;
 
+  static const devEmailCode = '111111';
+  static const devPhoneCode = '222222';
+
+  /// Посев данных: регистрация + подтверждение (для setup в тестах).
+  Future<void> seed(String email, String password) async {
+    await register(email, password, '+79991112233', 'dev-1');
+    await confirm(email, devEmailCode, devPhoneCode, 'dev-1');
+  }
+
   @override
-  Future<AccountSession> register(
-      String email, String password, String deviceId) async {
+  Future<RegisterPending> register(
+      String email, String password, String phone, String deviceId) async {
     if (serverDown) throw const ApiException('Сервер недоступен');
     if (users.containsKey(email)) {
       throw const ApiException('Email уже зарегистрирован', statusCode: 409);
     }
     users[email] = password;
+    _unverified.add(email);
+    return const RegisterPending(
+        devEmailCode: devEmailCode, devPhoneCode: devPhoneCode);
+  }
+
+  @override
+  Future<AccountSession> confirm(String email, String emailCode,
+      String phoneCode, String deviceId) async {
+    if (serverDown) throw const ApiException('Сервер недоступен');
+    if (!_unverified.contains(email)) {
+      throw const ApiException('Аккаунт уже подтверждён', statusCode: 409);
+    }
+    if (emailCode != devEmailCode || phoneCode != devPhoneCode) {
+      throw const ApiException('Неверный или истёкший код', statusCode: 400);
+    }
+    _unverified.remove(email);
     final token = 'tok-$email';
     _sessions[token] = email;
     return AccountSession(token: token, email: email);
+  }
+
+  @override
+  Future<RegisterPending> confirmResend(String email, String channel) async {
+    if (serverDown) throw const ApiException('Сервер недоступен');
+    if (!users.containsKey(email)) return const RegisterPending();
+    return RegisterPending(
+      devEmailCode: channel == 'email' ? devEmailCode : null,
+      devPhoneCode: channel == 'phone' ? devPhoneCode : null,
+    );
   }
 
   @override
@@ -38,6 +74,10 @@ class FakeGateway implements AccountGateway {
     if (serverDown) throw const ApiException('Сервер недоступен');
     if (users[email] != password) {
       throw const ApiException('Неверный email или пароль', statusCode: 401);
+    }
+    if (_unverified.contains(email)) {
+      throw const ApiException('Аккаунт не подтверждён. '
+          'Введите коды с почты и из SMS.', statusCode: 403);
     }
     // Политика 1/1: любая прежняя сессия вытесняется.
     _sessions.clear();
@@ -141,9 +181,19 @@ void main() {
     await lic.init();
     expect(lic.ready, true);
 
-    final err = await lic.register('user@example.com', 'secret1');
-    expect(err, isNull);
+    final res = await lic.register('user@example.com', 'secret1', '+79991234567');
+    expect(res.error, isNull);
+    expect(res.devEmailCode, FakeGateway.devEmailCode);
+    expect(res.devPhoneCode, FakeGateway.devPhoneCode);
+    expect(lic.loggedIn, false); // фаза 1 — сессии ещё нет
+    expect(lic.needsConfirm, true);
+    expect(lic.accountEmail, isNull);
+
+    final cerr = await lic.confirm(
+        FakeGateway.devEmailCode, FakeGateway.devPhoneCode);
+    expect(cerr, isNull);
     expect(lic.loggedIn, true);
+    expect(lic.needsConfirm, false);
     expect(lic.accountEmail, 'user@example.com');
     expect(lic.entitlement.pro, false); // без подписки — Free
 
@@ -164,7 +214,7 @@ void main() {
   });
 
   test('вход передаёт device_id и вытесняет прежние сессии (1/1)', () async {
-    await fake.register('a@b.co', 'secret1', 'dev-1');
+    await fake.seed('a@b.co', 'secret1');
     final lic = make();
     await lic.init();
     final err = await lic.login('a@b.co', 'secret1');
@@ -177,7 +227,7 @@ void main() {
   });
 
   test('вход с неверным паролем → ошибка, аккаунт не вошёл', () async {
-    await fake.register('a@b.co', 'secret1', 'dev-1');
+    await fake.seed('a@b.co', 'secret1');
     final lic = make();
     await lic.init();
     final err = await lic.login('a@b.co', 'wrong-password');
@@ -188,7 +238,9 @@ void main() {
   test('выход отзывает сессию и возвращает к офлайн-состоянию', () async {
     final lic = make();
     await lic.init();
-    await lic.register('x@y.zz', 'secret1');
+    await lic.register('x@y.zz', 'secret1', '+79991234567');
+    await lic.confirm(
+        FakeGateway.devEmailCode, FakeGateway.devPhoneCode);
     await lic.purchase('year');
     expect(lic.loggedIn, true);
     expect(lic.entitlement.pro, true);
@@ -200,7 +252,7 @@ void main() {
   });
 
   test('forgot + reset: код меняет пароль, старый не подходит', () async {
-    await fake.register('reset@example.com', 'old-pass1', 'dev-1');
+    await fake.seed('reset@example.com', 'old-pass1');
     final lic = make();
     await lic.init();
 
@@ -219,7 +271,7 @@ void main() {
   });
 
   test('reset с неверным кодом → ошибка', () async {
-    await fake.register('r2@example.com', 'old-pass1', 'dev-1');
+    await fake.seed('r2@example.com', 'old-pass1');
     final lic = make();
     await lic.init();
     final rerr = await lic.reset('r2@example.com', '000000', 'new-pass1');
@@ -252,24 +304,66 @@ void main() {
     expect(lic.entitlement.source, 'local');
   });
 
-  // Регрессия живого прогона 2026-09-26: services/auth отдаёт 201 Created,
-  // клиент принимал только 200 → регистрация падала с сырым JSON в UI.
-  test('AuthApi.register принимает 201 Created от /auth/register', () async {
+  // Двухфазная регистрация: register → 202 Accepted (pending + dev-коды),
+  // confirm → 201 Created (сессия). Раньше register отдавал 201 с токеном.
+  test('AuthApi: register 202 с dev-кодами, confirm 201 с сессией', () async {
     final server = await HttpServer.bind('127.0.0.1', 0);
     addTearDown(() => server.close(force: true));
+    final paths = <String>[];
     server.listen((req) async {
-      expect(req.uri.path, '/auth/register');
-      req.response.statusCode = 201;
+      paths.add(req.uri.path);
       req.response.headers.contentType = ContentType.json;
-      req.response.write(jsonEncode({
-        'token': 'tok-201',
-        'user': {'email': 'new@example.com'},
-      }));
+      if (req.uri.path == '/auth/register') {
+        req.response.statusCode = 202;
+        req.response.write(jsonEncode({
+          'pending': true,
+          'email': 'new@example.com',
+          'phone': '+79991234567',
+          'dev_email_code': '654321',
+          'dev_phone_code': '123456',
+          'sms_sent': false,
+        }));
+      } else if (req.uri.path == '/auth/confirm') {
+        req.response.statusCode = 201;
+        req.response.write(jsonEncode({
+          'token': 'tok-confirm',
+          'user': {'email': 'new@example.com'},
+          'orgs': [],
+        }));
+      } else {
+        req.response.statusCode = 404;
+        req.response.write(jsonEncode({'detail': 'not found'}));
+      }
       await req.response.close();
     });
     final api = AuthApi(baseUrl: 'http://127.0.0.1:${server.port}');
-    final session = await api.register('new@example.com', 'secret1', 'dev-1');
-    expect(session.token, 'tok-201');
+    final pending = await api.register(
+        'new@example.com', 'secret1', '+79991234567', 'dev-1');
+    expect(pending.ok, true);
+    expect(pending.devEmailCode, '654321');
+    expect(pending.devPhoneCode, '123456');
+
+    final session = await api.confirm(
+        'new@example.com', '654321', '123456', 'dev-1');
+    expect(session.token, 'tok-confirm');
     expect(session.email, 'new@example.com');
+    expect(paths, ['/auth/register', '/auth/confirm']);
+  });
+
+  // Вход с 403 «не подтверждён» переводит контроллер в режим confirm.
+  test('login с 403 выставляет needsConfirm', () async {
+    final lic = make();
+    await lic.init();
+    await lic.register('gate@example.com', 'secret1', '+79991234567');
+    // Выход из состояния pending имитируем: новая попытка входа без confirm.
+    final err = await lic.login('gate@example.com', 'secret1');
+    expect(err, isNotNull);
+    expect(lic.needsConfirm, true);
+    expect(lic.loggedIn, false);
+    // После подтверждения вход работает.
+    final cerr = await lic.confirm(
+        FakeGateway.devEmailCode, FakeGateway.devPhoneCode);
+    expect(cerr, isNull);
+    expect(lic.loggedIn, true);
   });
 }
