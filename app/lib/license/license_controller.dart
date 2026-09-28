@@ -122,11 +122,32 @@ class LicenseController extends ChangeNotifier {
         }
       }
       _accountError = null;
+    } on ApiException catch (e) {
+      if (e.statusCode == 401) {
+        // Сессия вытеснена/отозвана на сервере (политика 1/1) —
+        // сбрасываем локальную сессию, чтобы UI не показывал вход.
+        await _dropSession();
+      } else if (!quiet) {
+        _accountError = e.toString();
+      }
     } on Exception catch (e) {
       // Сервер недоступен — офлайн-фолбэк (кэш/триал) остаётся.
       if (!quiet) _accountError = e.toString();
     }
     notifyListeners();
+  }
+
+  /// Сброс локальной сессии при 401 (вытеснение/отзыв): кэш подписки
+  /// остаётся только если он локальный (триал), иначе — Free (как logout).
+  Future<void> _dropSession() async {
+    _session = null;
+    await sessionStore.clear();
+    final cached = await store.load();
+    final offline = (cached != null && cached.source == 'local')
+        ? cached
+        : Entitlement.free;
+    _entitlement = offline;
+    _accountError = null;
   }
 
   /// Вход в аккаунт (с этого устройства; лимит 1/1 — прежняя сессия
@@ -282,13 +303,39 @@ class LicenseController extends ChangeNotifier {
     }
   }
 
-  /// Активные устройства аккаунта (лимит 1/1 — максимум одно).
+  /// Проверка живости сессии (политика 1/1): вызывается при переключении
+  /// вкладок; сервер 401 → локальная сессия сбрасывается сразу, без
+  /// перезагрузки. Сетевые ошибки игнорируются (офлайн не разлогинивает).
+  Future<void> ensureSession() async {
+    final g = gateway;
+    final s = _session;
+    if (g == null || s == null) return;
+    try {
+      await g.me(s.token);
+    } on ApiException catch (e) {
+      if (e.statusCode == 401) {
+        await _dropSession();
+        notifyListeners();
+      }
+    } on Exception {
+      // Сервер недоступен — сессию не трогаем.
+    }
+  }
+
+  /// Активные устройства аккаунта (политика 1/1 — обычно одна).
   Future<List<AccountDevice>> devices() async {
     final g = gateway;
     final s = _session;
     if (g == null || s == null) return const [];
     try {
       return await g.devices(s.token);
+    } on ApiException catch (e) {
+      // 401 — сессию вытеснили, пока приложение было открыто.
+      if (e.statusCode == 401) {
+        await _dropSession();
+        notifyListeners();
+      }
+      return const [];
     } on Exception {
       return const [];
     }

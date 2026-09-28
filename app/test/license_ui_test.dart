@@ -9,6 +9,8 @@ import 'package:prepress_planner/license/license_controller.dart';
 import 'package:prepress_planner/src/projects/project.dart';
 import 'package:prepress_planner/src/screens/home_shell.dart';
 
+import 'license_account_test.dart' as acc;
+
 void main() {
   test('bootstrap: первый запуск → триал 15 дней; триал = полный доступ', () async {
     final dir = Directory.systemTemp.createTempSync('pp_boot');
@@ -97,6 +99,45 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
     expect(find.text('Препресс-Планер Pro'), findsOneWidget);
+    dir.deleteSync(recursive: true);
+  });
+
+  testWidgets('переключение вкладки: 401 → разлогин без перезагрузки',
+      (tester) async {
+    final dir = Directory.systemTemp.createTempSync('pp_tab401');
+    final fake = acc.FakeGateway();
+    final lic = LicenseController(
+      store: EntitlementStore('${dir.path}/st'),
+      client: LicenseClient(),
+      gateway: fake,
+      stateDir: '${dir.path}/st',
+    );
+    await tester.runAsync(() async {
+      await lic.init();
+      await lic.register('tab401@example.com', 'secret1', '+79991234567');
+      await lic.confirm(
+          acc.FakeGateway.devEmailCode, acc.FakeGateway.devPhoneCode);
+    });
+    expect(lic.loggedIn, true);
+
+    // Другое устройство вошло — наша сессия вытеснена (сервер отвечает 401).
+    fake.expiredSessions = true;
+    await tester.pumpWidget(MaterialApp(
+      home: HomeShell(
+          store: ProjectStore('${dir.path}/pr'), license: lic),
+    ));
+    await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 200)));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(lic.loggedIn, true); // ещё не проверяли
+
+    // Тап по вкладке → ensureSession → 401 → сброс.
+    await tester.tap(find.text('Юридическая'));
+    await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 300)));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(lic.loggedIn, false);
+    expect(find.text('Войти'), findsWidgets); // AccountButton разлогинен
     dir.deleteSync(recursive: true);
   });
 

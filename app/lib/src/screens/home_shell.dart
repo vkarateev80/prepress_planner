@@ -28,20 +28,32 @@ class HomeShell extends StatefulWidget {
   State<HomeShell> createState() => _HomeShellState();
 }
 
-class _HomeShellState extends State<HomeShell> {
+class _HomeShellState extends State<HomeShell>
+    with WidgetsBindingObserver {
   Project? project;
   int _index = 0;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     widget.license?.addListener(_onLicense);
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     widget.license?.removeListener(_onLicense);
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Возврат в окно/вкладку → сразу проверяем сессию (1/1): вытеснение
+    // с другого устройства откатывает аккаунт без видимого «лага».
+    if (state == AppLifecycleState.resumed) {
+      widget.license?.ensureSession();
+    }
   }
 
   void _onLicense() {
@@ -49,6 +61,7 @@ class _HomeShellState extends State<HomeShell> {
   }
 
   void _setProject(Project p) {
+    widget.license?.ensureSession(); // 401 → разлогин (1/1), fire-and-forget
     setState(() {
       project = p;
       _index = 1; // на геометрию
@@ -71,6 +84,9 @@ class _HomeShellState extends State<HomeShell> {
   }
 
   void _selectTab(int i) {
+    // Любое переключение вкладки проверяет сессию: вытеснение (1/1)
+    // откатывает аккаунт сразу, не дожидаясь перезагрузки страницы.
+    widget.license?.ensureSession();
     if (!_tabAllowed(i)) {
       final lic = widget.license;
       if (lic != null) {

@@ -145,6 +145,9 @@ abstract class AccountGateway {
   /// Переотправка кода подтверждения: channel = email | phone.
   Future<RegisterPending> confirmResend(String email, String channel);
 
+  /// Проверка живости сессии (`GET /auth/me`): 401 → ApiException(401).
+  Future<void> me(String token);
+
   /// Вход на устройстве [deviceId]: старые сессии вытесняются (лимит 1/1).
   Future<AccountSession> login(String email, String password, String deviceId);
 
@@ -191,6 +194,9 @@ class AccountGatewayHttp implements AccountGateway {
   @override
   Future<RegisterPending> confirmResend(String email, String channel) =>
       auth.confirmResend(email, channel);
+
+  @override
+  Future<void> me(String token) => auth.me(token);
 
   @override
   Future<AccountSession> login(
@@ -298,6 +304,21 @@ class AuthApi {
           devPhoneCode: j['dev_phone_code'] as String?,
         );
       }
+      throw ApiException(_detail(resp.text), statusCode: resp.status);
+    } on ApiException {
+      rethrow;
+    } on TimeoutException {
+      throw _noAnswer;
+    } on NetworkException {
+      throw _unavailable;
+    }
+  }
+
+  Future<void> me(String token) async {
+    try {
+      final resp = await httpJsonGet('$_base/auth/me',
+          headers: {'Authorization': 'Bearer $token'}, timeout: _timeout);
+      if (resp.status == 200) return;
       throw ApiException(_detail(resp.text), statusCode: resp.status);
     } on ApiException {
       rethrow;

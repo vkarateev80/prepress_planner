@@ -212,34 +212,40 @@ class _LegalScreenState extends State<LegalScreen> {
           Container(
             width: 260,
             color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
-            child: ListView(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              children: _sections.map((section) {
-                final index = _sections.indexOf(section);
-                final isSelected = index == _selectedIndex;
-                return ListTile(
-                  selected: isSelected,
-                  selectedTileColor: colorScheme.primaryContainer.withValues(alpha: 0.3),
-                  leading: Icon(
-                    section.$2,
-                    color: isSelected
-                        ? colorScheme.primary
-                        : colorScheme.onSurfaceVariant,
-                  ),
-                  title: Text(
-                    section.$1,
-                    style: TextStyle(
-                      fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+            // Material между ColoredBox(ListTile-контейнером) и ListTile —
+            // без него срабатывает assert фреймворка (ink/выделение
+            // рисуются на ближайшем Material и прячутся под ColoredBox).
+            child: Material(
+              color: Colors.transparent,
+              child: ListView(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                children: _sections.map((section) {
+                  final index = _sections.indexOf(section);
+                  final isSelected = index == _selectedIndex;
+                  return ListTile(
+                    selected: isSelected,
+                    selectedTileColor: colorScheme.primaryContainer.withValues(alpha: 0.3),
+                    leading: Icon(
+                      section.$2,
                       color: isSelected
                           ? colorScheme.primary
-                          : colorScheme.onSurface,
+                          : colorScheme.onSurfaceVariant,
                     ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  onTap: () => setState(() => _selectedIndex = index),
-                );
-              }).toList(),
+                    title: Text(
+                      section.$1,
+                      style: TextStyle(
+                        fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                        color: isSelected
+                            ? colorScheme.primary
+                            : colorScheme.onSurface,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    onTap: () => setState(() => _selectedIndex = index),
+                  );
+                }).toList(),
+              ),
             ),
           ),
           const VerticalDivider(width: 1),

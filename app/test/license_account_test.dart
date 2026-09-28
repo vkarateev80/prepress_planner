@@ -16,6 +16,7 @@ class FakeGateway implements AccountGateway {
   final Map<String, String> _sessions = {}; // token → email
   final Set<String> _unverified = {}; // ждут подтверждения
   bool serverDown = false;
+  bool expiredSessions = false; // сервер вернул 401 (сессию вытеснили)
   DateTime? _until;
   String? _plan;
   int purchaseCount = 0;
@@ -69,6 +70,14 @@ class FakeGateway implements AccountGateway {
   }
 
   @override
+  Future<void> me(String token) async {
+    if (serverDown) throw const ApiException('Сервер недоступен');
+    if (expiredSessions || !_sessions.containsKey(token)) {
+      throw const ApiException('Сессия недействительна', statusCode: 401);
+    }
+  }
+
+  @override
   Future<AccountSession> login(
       String email, String password, String deviceId) async {
     if (serverDown) throw const ApiException('Сервер недоступен');
@@ -93,6 +102,9 @@ class FakeGateway implements AccountGateway {
 
   @override
   Future<List<AccountDevice>> devices(String token) async {
+    if (expiredSessions) {
+      throw const ApiException('Сессия недействительна', statusCode: 401);
+    }
     if (!_sessions.containsKey(token)) return const [];
     return const [
       AccountDevice(deviceId: 'dev-1', current: true),
@@ -124,6 +136,9 @@ class FakeGateway implements AccountGateway {
   @override
   Future<ServerSubscription> subscription(String token) async {
     if (serverDown) throw const ApiException('Сервер недоступен');
+    if (expiredSessions) {
+      throw const ApiException('Сессия недействительна', statusCode: 401);
+    }
     return ServerSubscription(plan: _plan, pro: _until != null, until: _until);
   }
 
@@ -365,5 +380,59 @@ void main() {
         FakeGateway.devEmailCode, FakeGateway.devPhoneCode);
     expect(cerr, isNull);
     expect(lic.loggedIn, true);
+  });
+
+  // Политика 1/1: вытесненная сессия сбрасывается локально при 401,
+  // иначе «оба устройства выглядят залогиненными» (жалоба владельца).
+  test('init: сервер ответил 401 → локальная сессия сброшена', () async {
+    final lic = make();
+    await lic.init();
+    await lic.register('kick@example.com', 'secret1', '+79991234567');
+    await lic.confirm(
+        FakeGateway.devEmailCode, FakeGateway.devPhoneCode);
+    expect(lic.loggedIn, true);
+
+    // «Другое устройство» вошло — нашу сессию вытеснили (сервер: 401).
+    fake.expiredSessions = true;
+    final lic2 = make();
+    await lic2.init(); // восстановил сессию из файла → refresh → 401
+    expect(lic2.loggedIn, false);
+    expect(lic2.accountEmail, isNull);
+  });
+
+  test('ensureSession: 401 → сброс; недоступность сервера → без сброса',
+      () async {
+    final lic = make();
+    await lic.init();
+    await lic.register('ens@example.com', 'secret1', '+79991234567');
+    await lic.confirm(
+        FakeGateway.devEmailCode, FakeGateway.devPhoneCode);
+    expect(lic.loggedIn, true);
+
+    // Сервер недоступен — офлайн-сессию не трогаем.
+    fake.serverDown = true;
+    await lic.ensureSession();
+    expect(lic.loggedIn, true);
+
+    // Вытеснение: сервер 401 → локальный сброс.
+    fake.serverDown = false;
+    fake.expiredSessions = true;
+    await lic.ensureSession();
+    expect(lic.loggedIn, false);
+    expect(lic.accountEmail, isNull);
+  });
+
+  test('devices при открытом приложении: 401 → сессия сброшена', () async {
+    final lic = make();
+    await lic.init();
+    await lic.register('kick2@example.com', 'secret1', '+79991234567');
+    await lic.confirm(
+        FakeGateway.devEmailCode, FakeGateway.devPhoneCode);
+    expect(lic.loggedIn, true);
+
+    fake.expiredSessions = true;
+    final devs = await lic.devices();
+    expect(devs, isEmpty);
+    expect(lic.loggedIn, false);
   });
 }
