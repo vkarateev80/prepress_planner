@@ -53,10 +53,10 @@ bool _containsBytes(List<int> hay, List<int> needle) {
 }
 
 /// Сборка TeoReportData из реальных модулей (эталонный раскрой 9×5).
-TeoReportData _sampleData({DateTime? date}) {
+TeoReportData _sampleData({DateTime? date, LayoutParams? params}) {
   final cat = PriceCatalog.defaults();
-  final params = LayoutParams();
-  final calc = computeMaterialAuto(params);
+  final p = params ?? LayoutParams();
+  final calc = computeMaterialAuto(p);
   if (calc.error != null) throw StateError('calc: ${calc.error}');
   final shape = shapeFromPreset('rect', calc.labelW, calc.labelH);
   final cons = computeConsumption(calc, shape);
@@ -74,14 +74,14 @@ TeoReportData _sampleData({DateTime? date}) {
       workTime: WorkTime(hoursPerShift: 8, shiftsPerDay: 1));
   final teo = computeTeo(calc, cons, input);
   if (teo.error != null) throw StateError('teo: ${teo.error}');
-  final variants = enumerateVariants(params);
+  final variants = enumerateVariants(p);
   Consumption consFor(MaterialResult v) =>
       computeConsumption(v, shapeFromPreset('rect', v.labelW, v.labelH));
   final cmp = compareTeoVariants(variants, consFor, input);
   return TeoReportData(
     projectName: 'Проект «Северный ветер»',
     inputFile: 'C:/jobs/severnyj_veter/sever.dxf',
-    params: params,
+    params: p,
     shape: shape,
     calc: calc,
     consumption: cons,
@@ -306,6 +306,74 @@ void testWritersRealData() {
   ok('writers_real_data');
 }
 
+// ---------------------------------------------------------------------------
+// 6. Эскиз ТЭО (графа 6): подпись не наезжает на границы этикетки
+// ---------------------------------------------------------------------------
+
+/// Инвариант: подпись «Этикетка W × H» либо целиком внутри бокса,
+/// либо полностью под ним — никогда не пересекает линию границы.
+/// Регрессия: у узких габаритов (15×80) подпись рисовалась по центру
+/// бокса и вылезала за его стороны.
+void testSketchCaptionNoOverflow() {
+  final fontPath = fontPathForCyrillic();
+  expect(fontPath != null, 'шрифт для кириллицы найден');
+  final font = parseTtfFont(File(fontPath!).readAsBytesSync());
+
+  String hexOf(String s) {
+    final sb = StringBuffer();
+    for (final cp in s.runes) {
+      var gid = font.glyphFor(cp);
+      if (gid < 0) gid = font.glyphFor(0x3F);
+      if (gid < 0) gid = font.glyphFor(0x20);
+      expect(gid >= 0, 'глиф есть для U+${cp.toRadixString(16)}');
+      sb.write(gid.toRadixString(16).toUpperCase().padLeft(4, '0'));
+    }
+    return sb.toString();
+  }
+
+  void check(LayoutParams params, String mark) {
+    final data = _sampleData(params: params);
+    final out = 'test/golden/report_teo_sketch_$mark.pdf';
+    writeTeoReportPdf(out, data);
+    final text = String.fromCharCodes(File(out).readAsBytesSync());
+
+    final cap1 = 'Этикетка ${data.shape.w.toStringAsFixed(2)} мм × '
+        '${data.shape.h.toStringAsFixed(2)} мм';
+    final capHex = hexOf(cap1);
+    final capW = font.widthPt(cap1, 8);
+
+    final tm = RegExp('1 0 0 1 (-?[\\d.]+) (-?[\\d.]+) Tm <$capHex> Tj')
+        .firstMatch(text);
+    expect(tm != null, '[$mark] подпись «$cap1» найдена в потоке');
+    final capX = double.parse(tm!.group(1)!);
+    final capY = double.parse(tm.group(2)!);
+
+    final rects = RegExp('(-?[\\d.]+) (-?[\\d.]+) (-?[\\d.]+) (-?[\\d.]+) re S')
+        .allMatches(text);
+    expect(rects.isNotEmpty, '[$mark] бокс эскиза (re) найден');
+    final r = rects.last;
+    final rx = double.parse(r.group(1)!);
+    final ry = double.parse(r.group(2)!); // низ бокса (PDF-базис)
+    final rw = double.parse(r.group(3)!);
+    final rh = double.parse(r.group(4)!);
+
+    // Вертикальное пересечение подписи и бокса: глифы size=8 поднимаются
+    // над базовой линией не более чем на ~6.5 pt (cap-height ≈ 5.7).
+    final overlapV = capY + 6.5 > ry && capY < ry + rh;
+    final insideX = capX >= rx - 0.5 && capX + capW <= rx + rw + 0.5;
+    expect(overlapV == false || insideX,
+        '[$mark] подпись не пересекает границу бокса '
+        '(capX=$capX capW=$capW rect=[$rx..${rx + rw}] '
+        'capY=$capY rectY=[$ry..${ry + rh}])');
+  }
+
+  // Широкая этикетка (эталон 50×30): подпись внутри бокса.
+  check(LayoutParams(), 'wide');
+  // Узкий высокий габарит: подпись должна уйти под бокс, а не вылезать.
+  check(LayoutParams(labelW: 15, labelH: 80), 'narrow');
+  ok('sketch_caption_no_overflow');
+}
+
 void main() {
   // Каталог для выходных артефактов.
   Directory('test/golden').createSync(recursive: true);
@@ -314,6 +382,7 @@ void main() {
   testXlsxStructure();
   testDxfWrite();
   testWritersRealData();
+  testSketchCaptionNoOverflow();
   // ignore: avoid_print
   print('Все тесты отчётов (PDF/XLSX/DXF) пройдены.');
 }

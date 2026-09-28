@@ -318,8 +318,9 @@ void _drawSketch(_Flow f, TeoReportData d) {
   final bw = w * scale;
   final bh = h * scale;
   final bx = (doc.pageWidth - bw) / 2;
-  // Если блок не помещается на текущей странице — начинаем новую.
-  if (f.y + 8 + bh + 34 > f.bottomLimit) {
+  // Если блок не помещается на текущей странице — начинаем новую
+  // (запас под подпись и масштаб под боксом — до 46 pt).
+  if (f.y + 8 + bh + 46 > f.bottomLimit) {
     f.cv = doc.newPage();
     f.y = 48;
   }
@@ -327,13 +328,26 @@ void _drawSketch(_Flow f, TeoReportData d) {
   final cv = f.cv;
   cv.rect(bx, py0, bw, bh, lineWidth: 1.0);
   final cap1 = 'Этикетка ${_mm(shape.w)} × ${_mm(shape.h)}';
-  cv.text(cap1,
-      x: (doc.pageWidth - doc.font.widthPt(cap1, 8)) / 2,
-      yTop: py0 + bh / 2 - 4, size: 8);
+  final cap1W = doc.font.widthPt(cap1, 8);
+  // Подпись рисуем ВНУТРИ бокса только когда она реально влезает
+  // (по ширине с запасом и по высоте); иначе — под боксом, чтобы
+  // текст не наезжал на границы этикетки (узкие/высокие габариты).
+  final inside = cap1W <= bw - 8 && bh >= 16;
+  if (inside) {
+    cv.text(cap1,
+        x: (doc.pageWidth - cap1W) / 2,
+        yTop: py0 + bh / 2 - 4, size: 8);
+  } else {
+    // Базовая линия на 8 pt ниже границы: глифы (cap-height ≈ 5.7 pt
+    // у size 8) гарантированно не касаются линии бокса.
+    cv.text(cap1,
+        x: (doc.pageWidth - cap1W) / 2,
+        yTop: py0 + bh + 8, size: 8);
+  }
   final cap2 = 'увеличение ×${scale.toStringAsFixed(1)} '
       '(1:${(1 / scale).toStringAsFixed(2)})';
   cv.text(cap2,
       x: (doc.pageWidth - doc.font.widthPt(cap2, 7)) / 2,
-      yTop: py0 + bh + 12, size: 7);
-  f.y = py0 + bh + 30;
+      yTop: py0 + bh + (inside ? 12 : 22), size: 7);
+  f.y = py0 + bh + (inside ? 30 : 40);
 }
