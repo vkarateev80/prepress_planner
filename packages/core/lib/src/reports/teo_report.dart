@@ -288,7 +288,10 @@ void _tableHeader(_Flow f) {
   cv.text('₽ / 1000', x: 340, yTop: f.y, size: 8);
   f.y += 10;
   cv.line(45, f.y + 2, f.right, f.y + 2, lineWidth: 0.4);
-  f.y += 4;
+  // y текста = базовая линия (глифы выше на ~6 pt у size 8): первая строка
+  // должна начинаться ниже линии с запасом, иначе линия режет её середину
+  // (живой прогон: линия 609 vs baseline строки 611 → наезд).
+  f.y += 11;
 }
 
 void _tableRow(_Flow f, String no, String grid, String rot, String n,
