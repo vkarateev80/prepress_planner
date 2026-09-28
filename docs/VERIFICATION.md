@@ -257,3 +257,91 @@ edge-nginx `:8080` (статика `app/build/web`, прокси → `host.docke
   3/3 шага, offsite-загрузка подтверждена `s3 ls`.
 - Приложения (Flutter) не изменялись — предыдущие прогоны (analyze 0,
   51/51, build web) актуальны.
+
+## 11. Дрилл-восстановление из бэкапа (2026-09-28, HANDOFF §17 п.6)
+
+Пункт §17 п.6 («restore ни разу не проверялся») закрыт: восстановление
+отработано **в изолированных scratch-ресурсах** (прода не затрагивал),
+результаты — фактические выводы ниже. База: свежий baseline-бэкап
+`/opt/pp/drill/20260928_170327` (db 28 767 Б, bucket 60 файлов), снятый
+штатным `deploy/k8s/backup.sh`.
+
+### 11.1 PostgreSQL: restore → сверка
+
+- Scratch-постгрес: под `pg-drill` (образ `postgres:16-alpine` локальный,
+  `deploy/k8s/drill-pg.yaml`; uid 70 + init-chown — образ отказывается
+  стартовать от root, пустой каталог volume не проходит chmod без chown).
+- `gunzip -c db_*.sql.gz | psql` → **RESTORE_OK** (0 ошибок, ON_ERROR_STOP).
+- Счётчики 9/9 таблиц **1:1** с живой: entitlements=7, file_versions=12,
+  files=12, orders=2, plans=3, projects=6, reports=6, subscriptions=7,
+  transactions=0.
+- `pg_dump --data-only` живой vs восстановленный: **diff чист** —
+  различаются только случайные токены `\restrict`/`\unrestrict` в шапке
+  pg_dump (153 строки в обоих).
+
+### 11.2 SQLite auth/billing: пробел найден и закрыт
+
+**Пробел (пойман дриллом):** `backup.sh` брал только `prepress_saas` и MinIO;
+аккаунты (`PVC auth-data` → `/srv/auth/data/auth.db`, 77 824 Б) и
+`billing-data` в бэкап **не попадали** — восстановление теряло бы всех
+пользователей.
+
+**Фикс:** в `deploy/k8s/backup.sh` добавлен шаг `2/4` — онлайн-бэкап SQLite
+через python `sqlite3.Connection.backup()` в контейнере auth (консистентный
+снимок при активных записях) → `auth_<метка>.db.gz`, плюс tar
+`billing_<метка>.tar.gz` (сейчас пустой — платежей не было). Шаги
+перенумерованы (1/4…4/4), команды восстановления — в шапке скрипта.
+
+**Проверка фикса** (бэкап `20260928_171733`, все 4 шага):
+- `auth_20260928_171733.db.gz` — 3 816 Б; восстановлен в scratch-под
+  (`pp-auth:latest`, `/restore/auth.db`).
+- Счётчики **1:1** с живым: users=7, memberships=7, organizations=7,
+  sessions=9, reset_codes=1, invites=0.
+- sha256 схемы (`sqlite_master` name+sql) живой и восстановленной:
+  **b8ad998e6750d1121114786a13919c238ebb1c94d61b502d54362d9d0a5b12e0** —
+  совпадает.
+- `billing_*.tar.gz` — корректный архив (`./` пуст: данных ещё нет).
+
+### 11.3 MinIO: restore → сверка → boot → S3 API
+
+- Пользовательские данные (`prepress-saas/…`): **24/24 файла sha256
+  идентичны живому бакету** (снимок через 8 мин после бэкапа).
+- Служебные `.minio.sys` (usage-кэши, bloomcycle, `.trash`) расходятся —
+  **ожидаемо**: MinIO непрерывно переписывает их (trash ротируется).
+- Boot-тест: под `minio-drill` (`deploy/k8s/drill-minio.yaml`) — зеркало
+  копируется в пустой volume, `minio server` стартует, readiness
+  `/minio/health/live` → **Ready**.
+- S3 API против drill-MinIO (`aws-cli` из docker, `list-objects-v2`):
+  **18/18 ключей** совпали с ожидаемыми из зеркала.
+- GET объекта `org/…/v205_150x100_paper.ai` из drill и из живого MinIO:
+  **байт-в-байт одинаковы** (1 395 660 Б, sha256
+  `0f66033ca78fd189cc8d2321f33ec90160087da041f8ee44d07fc57eb0fc59df`).
+
+### 11.4 Итог
+
+| Компонент | Восстановление | Сверка |
+|---|---|---|
+| PostgreSQL `prepress_saas` | ✅ RESTORE_OK | 9/9 таблиц, diff данных чист |
+| SQLite `auth.db` (аккаунты) | ✅ (фикс backup.sh) | 6/6 таблиц, схема 1:1 |
+| SQLite billing-data | ✅ (шаг добавлен) | архив корректен, данных нет |
+| MinIO `prepress-saas` | ✅ boot + S3 API | 24/24 файла sha, 18/18 ключей, GET 1:1 |
+
+Прод не изменялся: все восстановления — в scratch-подах (`pg-drill`,
+`auth-drill`, `minio-drill`), удалены после дрилла. Доказательства и
+бэкапы: `/opt/pp/drill/` (20260928_170327 — baseline, 20260928_171733 —
+с фиксом). Инструменты: `deploy/k8s/drill-pg.yaml`, `drill-minio.yaml`.
+
+### 11.5 Наблюдение: `/healthz` упирается в 1-секундный таймаут проб
+
+На время дрилла (pg_dump, tar MinIO, sha256, docker pull aws-cli) на узле
+поднялась загрузка (load avg ~3.3 на 4 ядра; постоянные потребители — k3s
+~27 % CPU и **prometheus из ns `monitoring`** ~26 %) и проявилась
+хрупкость, **не связанная с дриллом** (последний рестарт api — за 3 мин до
+baseline): пробы `readiness`/`liveness` на `/healthz` не задают
+`timeoutSeconds` → дефолт **1 с** (`deploy/k8s/22-api.yaml`), а сам healthz
+делает пинг БД **и** HeadBucket к MinIO: замер из кластера — **3.7 с** под
+нагрузкой → флок проб (события `context deadline exceeded`, у postgresql —
+`pg_isready … timed out after 1s`). Рекомендация (открыто, HANDOFF §17 п.7):
+поднять `timeoutSeconds` до 3–5 в манифестах проб и/или разгрузить
+healthz (кэш статуса storage), алерты — на уже установленный prometheus
+(ns `monitoring`, age 4d9h).

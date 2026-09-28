@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: minio-drill
+  namespace: prepress
+  labels: {app: minio-drill}
+spec:
+  containers:
+    - name: minio
+      image: alpine/minio:RELEASE.2025-10-15T17-29-55Z
+      imagePullPolicy: IfNotPresent
+      command: ["sh", "-c", "cp -a /mirror/. /data/ && exec minio server /data --console-address :9001"]
+      env:
+        - name: MINIO_ROOT_USER
+          value: drill_admin
+        - name: MINIO_ROOT_PASSWORD
+          value: Drill_2026_pass
+      ports:
+        - containerPort: 9000
+          name: s3
+      readinessProbe:
+        httpGet:
+          path: /minio/health/live
+          port: 9000
+        initialDelaySeconds: 3
+        periodSeconds: 3
+      volumeMounts:
+        - name: data
+          mountPath: /data
+        - name: mirror
+          mountPath: /mirror
+  volumes:
+    - name: data
+      emptyDir: {}
+    - name: mirror
+      hostPath:
+        path: /opt/pp/drill/20260928_170327/bucket
+        type: Directory

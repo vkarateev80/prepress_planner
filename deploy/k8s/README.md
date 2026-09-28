@@ -81,13 +81,19 @@ cd deploy && docker compose up -d --build   # данные старого compos
 ## Резервное копирование (k3s)
 
 ```bash
-bash k8s/backup.sh            # → deploy/backups/db_<метка>.sql.gz + bucket/
+bash k8s/backup.sh            # → deploy/backups/db_<метка>.sql.gz,
+                               #   auth_<метка>.db.gz, billing_<метка>.tar.gz,
+                               #   bucket/
 ```
 
-Шаги: `pg_dump` из пода postgresql → зеркало данных MinIO (tar-поток) →
+Шаги: `pg_dump` из пода postgresql → **SQLite auth+billing** (PVC
+`auth-data`/`billing-data`; аккаунты — консистентный онлайн-снимок через
+`sqlite3 backup()` в контейнере auth) → зеркало данных MinIO (tar-поток) →
 опционально offsite (`PP_OFFSITE_*`, те же переменные что и в compose-версии).
 Cron на сервере уже установлен: **ежедневно в 04:00**, лог
-`/var/log/pp-backup.log`. Восстановление БД — в шапке скрипта.
+`/var/log/pp-backup.log`. Команды восстановления — в шапке скрипта.
+Дрилл-проверка восстановления (scratch-поды, прод не трогается) —
+`docs/VERIFICATION.md` §11; инструменты: `k8s/drill-pg.yaml`, `k8s/drill-minio.yaml`.
 
 ## SMTP (письма: сброс пароля, приглашения F-19)
 
