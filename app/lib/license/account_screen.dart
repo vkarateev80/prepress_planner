@@ -23,8 +23,10 @@ class AccountScreen extends StatefulWidget {
 }
 
 class _AccountScreenState extends State<AccountScreen> {
+  final _nameCtrl = TextEditingController();
   final _emailCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
+  final _pass2Ctrl = TextEditingController();
   final _phoneCtrl = TextEditingController();
   final _codeCtrl = TextEditingController();
   final _emailCodeCtrl = TextEditingController();
@@ -44,8 +46,10 @@ class _AccountScreenState extends State<AccountScreen> {
 
   @override
   void dispose() {
+    _nameCtrl.dispose();
     _emailCtrl.dispose();
     _passCtrl.dispose();
+    _pass2Ctrl.dispose();
     _phoneCtrl.dispose();
     _codeCtrl.dispose();
     _emailCodeCtrl.dispose();
@@ -65,12 +69,21 @@ class _AccountScreenState extends State<AccountScreen> {
     }
     setState(() => _message = '');
     if (_registerMode) {
+      final name = _nameCtrl.text.trim();
       final phone = _phoneCtrl.text.trim();
+      if (name.isEmpty) {
+        setState(() => _message = 'Введите имя пользователя');
+        return;
+      }
       if (phone.isEmpty) {
         setState(() => _message = 'Введите номер телефона');
         return;
       }
-      final res = await license.register(email, password, phone);
+      if (password != _pass2Ctrl.text) {
+        setState(() => _message = 'Пароли не совпадают');
+        return;
+      }
+      final res = await license.register(name, email, password, phone);
       if (!mounted) return;
       if (res.error != null) {
         setState(() => _message = res.error!);
@@ -287,6 +300,16 @@ class _AccountScreenState extends State<AccountScreen> {
           style: Theme.of(context).textTheme.titleMedium,
         ),
         const SizedBox(height: 16),
+        if (_registerMode && !_confirmMode && !_resetMode) ...[
+          TextField(
+            controller: _nameCtrl,
+            decoration: const InputDecoration(
+                labelText: 'Имя пользователя',
+                border: OutlineInputBorder(),
+                isDense: true),
+          ),
+          const SizedBox(height: 12),
+        ],
         TextField(
           controller: _emailCtrl,
           enabled: !_confirmMode,
@@ -360,6 +383,18 @@ class _AccountScreenState extends State<AccountScreen> {
                 isDense: true),
             onSubmitted: (_) => _submit(),
           ),
+          if (_registerMode) ...[
+            const SizedBox(height: 12),
+            TextField(
+              controller: _pass2Ctrl,
+              obscureText: true,
+              decoration: const InputDecoration(
+                  labelText: 'Повторите пароль',
+                  border: OutlineInputBorder(),
+                  isDense: true),
+              onSubmitted: (_) => _submit(),
+            ),
+          ],
         ],
         if (_message.isNotEmpty) ...[
           const SizedBox(height: 8),

@@ -14,6 +14,7 @@ import 'package:flutter/foundation.dart';
 import 'account_client.dart';
 import 'entitlement_store.dart';
 import 'license_client.dart';
+import '../platform/open_url.dart';
 
 /// Связывает хранилище (кэш), шлюз аккаунта (auth+payments, опционально),
 /// [MachineId] и уведомляет UI об изменениях.
@@ -23,6 +24,9 @@ class LicenseController extends ChangeNotifier {
   final String stateDir; // каталог для machine_id.txt и session.json
   final AccountGateway? gateway;
   final SessionStore sessionStore;
+
+  /// Открытие внешнего URL (страница оплаты ЮKassa); в тестах подменяется.
+  final void Function(String url) openUrl;
 
   Entitlement _entitlement = Entitlement.free;
   AccountSession? _session;
@@ -35,7 +39,9 @@ class LicenseController extends ChangeNotifier {
     required this.client,
     required this.stateDir,
     this.gateway,
-  }) : sessionStore = SessionStore(stateDir);
+    void Function(String url)? openUrl,
+  })  : openUrl = openUrl ?? openUrlExternal,
+        sessionStore = SessionStore(stateDir);
 
   Entitlement get entitlement => _entitlement;
   bool get ready => _ready;
@@ -181,10 +187,11 @@ class LicenseController extends ChangeNotifier {
     }
   }
 
-  /// Регистрация, фаза 1: аккаунт создан, коды отправлены; сессии нет.
-  /// Успех → [needsConfirm] = true, в ответе dev-коды недоступных каналов.
+  /// Регистрация, фаза 1: аккаунт создан (имя, почта, пароль, телефон),
+  /// коды отправлены; сессии нет. Успех → [needsConfirm] = true,
+  /// в ответе dev-коды недоступных каналов.
   Future<({String? error, String? devEmailCode, String? devPhoneCode})>
-      register(String email, String password, String phone) async {
+      register(String name, String email, String password, String phone) async {
     final g = gateway;
     if (g == null) {
       return (
@@ -198,8 +205,8 @@ class LicenseController extends ChangeNotifier {
     notifyListeners();
     try {
       final deviceId = await _deviceIdOrError();
-      final res =
-          await g.register(email.trim(), password, phone.trim(), deviceId);
+      final res = await g.register(
+          name.trim(), email.trim(), password, phone.trim(), deviceId);
       _pendingEmail = res.ok ? email.trim() : null;
       return (
         error: res.error,
@@ -317,9 +324,14 @@ class LicenseController extends ChangeNotifier {
         await _dropSession();
         notifyListeners();
       }
+      return;
     } on Exception {
       // Сервер недоступен — сессию не трогаем.
+      return;
     }
+    // Сессия жива — заодно подтягиваем подписку (в т.ч. после оплаты:
+    // возврат фокуса/вкладки обновляет Pro без перезагрузки).
+    await _refreshFromServer(quiet: true);
   }
 
   /// Активные устройства аккаунта (политика 1/1 — обычно одна).
@@ -386,9 +398,13 @@ class LicenseController extends ChangeNotifier {
       _busy = true;
       notifyListeners();
       try {
-        // Сервер сам продлил подписку — забираем актуальный статус.
-        await g.purchase(s.token, period);
-        await _refreshFromServer();
+        // Заказ + открытие страницы оплаты ЮKassa (confirmation_url).
+        // Подтверждение — только вебхуком; триал не трогаем (quiet), пока
+        // платёж не подтверждён.
+        final order = await g.purchase(s.token, period);
+        final url = (order['confirmation_url'] as String?) ?? '';
+        if (url.isNotEmpty) openUrl(url);
+        await _refreshFromServer(quiet: true);
         return null;
       } on Exception catch (e) {
         _accountError = e.toString();

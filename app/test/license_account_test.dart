@@ -17,6 +17,7 @@ class FakeGateway implements AccountGateway {
   final Set<String> _unverified = {}; // ждут подтверждения
   bool serverDown = false;
   bool expiredSessions = false; // сервер вернул 401 (сессию вытеснили)
+  String? pendingPaymentUrl; // checkout вернул страницу оплаты, pro ещё нет
   DateTime? _until;
   String? _plan;
   int purchaseCount = 0;
@@ -26,13 +27,13 @@ class FakeGateway implements AccountGateway {
 
   /// Посев данных: регистрация + подтверждение (для setup в тестах).
   Future<void> seed(String email, String password) async {
-    await register(email, password, '+79991112233', 'dev-1');
+    await register('Тест Юзер', email, password, '+79991112233', 'dev-1');
     await confirm(email, devEmailCode, devPhoneCode, 'dev-1');
   }
 
   @override
-  Future<RegisterPending> register(
-      String email, String password, String phone, String deviceId) async {
+  Future<RegisterPending> register(String name, String email,
+      String password, String phone, String deviceId) async {
     if (serverDown) throw const ApiException('Сервер недоступен');
     if (users.containsKey(email)) {
       throw const ApiException('Email уже зарегистрирован', statusCode: 409);
@@ -151,6 +152,12 @@ class FakeGateway implements AccountGateway {
   @override
   Future<Map<String, dynamic>> purchase(String token, String plan) async {
     if (serverDown) throw const ApiException('Сервер недоступен');
+    if (pendingPaymentUrl != null) {
+      // Реальный путь: заказ создан, открылась страница ЮKassa,
+      // Pro придёт с вебхуком — сейчас не активируем.
+      return {'order_id': 'o-pending', 'plan': plan,
+              'confirmation_url': pendingPaymentUrl};
+    }
     purchaseCount++;
     _plan = plan;
     final now = DateTime.now();
@@ -196,7 +203,7 @@ void main() {
     await lic.init();
     expect(lic.ready, true);
 
-    final res = await lic.register('user@example.com', 'secret1', '+79991234567');
+    final res = await lic.register('Тест Юзер', 'user@example.com', 'secret1', '+79991234567');
     expect(res.error, isNull);
     expect(res.devEmailCode, FakeGateway.devEmailCode);
     expect(res.devPhoneCode, FakeGateway.devPhoneCode);
@@ -253,7 +260,7 @@ void main() {
   test('выход отзывает сессию и возвращает к офлайн-состоянию', () async {
     final lic = make();
     await lic.init();
-    await lic.register('x@y.zz', 'secret1', '+79991234567');
+    await lic.register('Тест Юзер', 'x@y.zz', 'secret1', '+79991234567');
     await lic.confirm(
         FakeGateway.devEmailCode, FakeGateway.devPhoneCode);
     await lic.purchase('year');
@@ -353,7 +360,7 @@ void main() {
     });
     final api = AuthApi(baseUrl: 'http://127.0.0.1:${server.port}');
     final pending = await api.register(
-        'new@example.com', 'secret1', '+79991234567', 'dev-1');
+        'Новый', 'new@example.com', 'secret1', '+79991234567', 'dev-1');
     expect(pending.ok, true);
     expect(pending.devEmailCode, '654321');
     expect(pending.devPhoneCode, '123456');
@@ -369,7 +376,7 @@ void main() {
   test('login с 403 выставляет needsConfirm', () async {
     final lic = make();
     await lic.init();
-    await lic.register('gate@example.com', 'secret1', '+79991234567');
+    await lic.register('Тест Юзер', 'gate@example.com', 'secret1', '+79991234567');
     // Выход из состояния pending имитируем: новая попытка входа без confirm.
     final err = await lic.login('gate@example.com', 'secret1');
     expect(err, isNotNull);
@@ -387,7 +394,7 @@ void main() {
   test('init: сервер ответил 401 → локальная сессия сброшена', () async {
     final lic = make();
     await lic.init();
-    await lic.register('kick@example.com', 'secret1', '+79991234567');
+    await lic.register('Тест Юзер', 'kick@example.com', 'secret1', '+79991234567');
     await lic.confirm(
         FakeGateway.devEmailCode, FakeGateway.devPhoneCode);
     expect(lic.loggedIn, true);
@@ -404,7 +411,7 @@ void main() {
       () async {
     final lic = make();
     await lic.init();
-    await lic.register('ens@example.com', 'secret1', '+79991234567');
+    await lic.register('Тест Юзер', 'ens@example.com', 'secret1', '+79991234567');
     await lic.confirm(
         FakeGateway.devEmailCode, FakeGateway.devPhoneCode);
     expect(lic.loggedIn, true);
@@ -422,10 +429,39 @@ void main() {
     expect(lic.accountEmail, isNull);
   });
 
+  test('покупка: checkout открывает страницу оплаты, Pro — после вебхука',
+      () async {
+    final opened = <String>[];
+    final lic = LicenseController(
+      store: EntitlementStore(dir.path),
+      client: LicenseClient(),
+      gateway: fake,
+      stateDir: dir.path,
+      openUrl: opened.add,
+    );
+    await lic.init();
+    await lic.register('Тест Юзер', 'pay404@example.com', 'secret1', '+79991234567');
+    await lic.confirm(
+        FakeGateway.devEmailCode, FakeGateway.devPhoneCode);
+    fake.pendingPaymentUrl = 'https://yookassa.test/pay/abc';
+
+    final err = await lic.purchase('month');
+    expect(err, isNull);
+    expect(opened, ['https://yookassa.test/pay/abc']); // страница открыта
+    expect(lic.entitlement.pro, false); // вебхук ещё не подтвердил
+
+    // «Вебхук» подтвердил оплату → «Восстановить покупки» подтягивает Pro.
+    fake.grant('month');
+    fake.pendingPaymentUrl = null;
+    final rerr = await lic.purchase('restore');
+    expect(rerr, isNull);
+    expect(lic.entitlement.pro, true);
+  });
+
   test('devices при открытом приложении: 401 → сессия сброшена', () async {
     final lic = make();
     await lic.init();
-    await lic.register('kick2@example.com', 'secret1', '+79991234567');
+    await lic.register('Тест Юзер', 'kick2@example.com', 'secret1', '+79991234567');
     await lic.confirm(
         FakeGateway.devEmailCode, FakeGateway.devPhoneCode);
     expect(lic.loggedIn, true);

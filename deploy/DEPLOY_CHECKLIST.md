@@ -4,7 +4,7 @@
 2. Сертификаты TLS: **прод** — `PP_DOMAIN=example.com PP_ACME_EMAIL=admin@example.com bash deploy/nginx/get_prod_certs.sh` (Let's Encrypt, webroot; обновление — `… get_prod_certs.sh renew`, cron `0 3 * * 1`); для стенда — `bash deploy/nginx/gen_dev_certs.sh`. Файлы — `deploy/nginx/certs/fullchain.pem` + `privkey.pem`.
 3. `docker compose up -d --build` из `deploy/`.
 4. Проверить `/healthz`: `curl -sf https://<domain>/healthz`.
-5. Проверить auth: `POST /auth/register` `{email,password,phone}` → **202
+5. Проверить auth: `POST /auth/register` `{name,email,password,phone}` → **202
    pending** (dev-коды в ответе, если SMTP/SMS dev-режимные), затем
    `POST /auth/confirm` `{email,email_code,phone_code}` → **201** с
    `token` + `orgs`; `login` до confirm → 403.

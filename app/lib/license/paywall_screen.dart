@@ -31,7 +31,17 @@ Future<void> openPaywall(
           );
           return;
         }
-        Navigator.of(context).pop();
+        if (license.entitlement.pro) {
+          Navigator.of(context).pop();
+          return;
+        }
+        // Страница оплаты открыта, но вебхук ещё не подтвердил —
+        // не выдаём успех за успех.
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text(
+              'Оплата открыта в новой вкладке. После оплаты Pro '
+              'активируется автоматически — окно можно закрыть.')),
+        );
       },
     ),
   ));

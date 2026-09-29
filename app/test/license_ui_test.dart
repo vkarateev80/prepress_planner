@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:prepress_planner/license/entitlement_store.dart';
 import 'package:prepress_planner/license/license_client.dart';
 import 'package:prepress_planner/license/license_controller.dart';
+import 'package:prepress_planner/license/account_screen.dart';
 import 'package:prepress_planner/src/projects/project.dart';
 import 'package:prepress_planner/src/screens/home_shell.dart';
 
@@ -102,6 +103,50 @@ void main() {
     dir.deleteSync(recursive: true);
   });
 
+  testWidgets('форма регистрации: имя, пароль и подтверждение пароля',
+      (tester) async {
+    final dir = Directory.systemTemp.createTempSync('pp_regform');
+    final lic = LicenseController(
+      store: EntitlementStore('${dir.path}/st'),
+      client: LicenseClient(),
+      stateDir: '${dir.path}/st',
+    );
+    await tester.runAsync(() => lic.init());
+    await tester.pumpWidget(MaterialApp(home: AccountScreen(license: lic)));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await tester.tap(find.text('Нет аккаунта — зарегистрироваться'));
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.text('Имя пользователя'), findsOneWidget);
+    expect(find.text('Повторите пароль'), findsOneWidget);
+
+    // Пустое имя → подсказка, наружу не уходим.
+    await tester.enterText(find.byType(TextField).at(1), 'u@example.com');
+    await tester.enterText(find.byType(TextField).at(2), '+79991234567');
+    await tester.enterText(find.byType(TextField).at(3), 'secret1');
+    await tester.enterText(find.byType(TextField).at(4), 'secret1');
+    // Шесть полей не помещаются: прокручиваем список к кнопке.
+    await tester.drag(find.byType(ListView).first, const Offset(0, -400));
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.tap(find.text('Создать аккаунт'));
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.text('Введите имя пользователя'), findsOneWidget);
+
+    // Пароли не совпадают.
+    await tester.enterText(find.byType(TextField).at(0), 'Иван');
+    await tester.enterText(find.byType(TextField).at(4), 'other');
+    await tester.tap(find.text('Создать аккаунт'));
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.text('Пароли не совпадают'), findsOneWidget);
+
+    // Всё верно → уходим в controller (offline-фолбэк: сервера нет).
+    await tester.enterText(find.byType(TextField).at(4), 'secret1');
+    await tester.tap(find.text('Создать аккаунт'));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.textContaining('Регистрация недоступна'), findsOneWidget);
+    dir.deleteSync(recursive: true);
+  });
+
   testWidgets('переключение вкладки: 401 → разлогин без перезагрузки',
       (tester) async {
     final dir = Directory.systemTemp.createTempSync('pp_tab401');
@@ -114,7 +159,7 @@ void main() {
     );
     await tester.runAsync(() async {
       await lic.init();
-      await lic.register('tab401@example.com', 'secret1', '+79991234567');
+      await lic.register('Тест Юзер', 'tab401@example.com', 'secret1', '+79991234567');
       await lic.confirm(
           acc.FakeGateway.devEmailCode, acc.FakeGateway.devPhoneCode);
     });

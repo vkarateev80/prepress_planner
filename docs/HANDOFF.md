@@ -720,3 +720,21 @@ domain-worker зелёные; `pp-domain-worker` выкачен (`62f6551`), ж�
 через API (GET /payments|/refunds/{id} + статус); подпись опциональна.
 Payments 57 тестов, полный pytest 167. Осталось: деплой billing + живая
 проверка + оплата владельцем.
+
+**Paywall «not found» (2026-09-28, VERIFICATION §17):** покупка звала
+удалённый `/payments/orders/{id}/confirm` → 404. Теперь checkout →
+открытие `confirmation_url` (`LicenseController.openUrl`), подтверждение —
+вебхук; `ensureSession` при возврате фокуса подтягивает подписку. Тесты
+57/57.
+
+## 21. SMS.ru: реальный провайдер подтверждения телефона (2026-09-28)
+
+Адаптер готов (`PP_SMS_PROVIDER=sms_ru`, api_id в `PP_SMS_API_ID`;
+test=1 через `PP_SMS_TEST`); dev_phone_code теперь только в dev-режиме.
+Тесты 170. Осталось: api_id владельца → секрет → включение → живая
+отправка (VERIFICATION §18, DEPLOY_CHECKLIST п.5).
+
+**Регистрационные данные (2026-09-28, VERIFICATION §19):** обязательное
+`name` в register (миграция `users.name`, отдаётся в user-объектах),
+форма: имя/почта/телефон/пароль/подтверждение пароля (валидация на
+клиенте). Тесты 171 + flutter 58.

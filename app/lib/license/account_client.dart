@@ -133,10 +133,11 @@ class SessionStore {
 
 /// Шлюз аккаунта: auth + payments. В тестах подменяется фейком.
 abstract class AccountGateway {
-  /// Регистрация, фаза 1: создаёт неподтверждённый аккаунт и запускает
-  /// отправку кодов (email + SMS). Сессию НЕ выдаёт.
-  Future<RegisterPending> register(
-      String email, String password, String phone, String deviceId);
+  /// Регистрация, фаза 1: создаёт неподтверждённый аккаунт (имя, почта,
+  /// пароль, телефон) и запускает отправку кодов (email + SMS).
+  /// Сессию НЕ выдаёт.
+  Future<RegisterPending> register(String name, String email,
+      String password, String phone, String deviceId);
 
   /// Подтверждение, фаза 2: оба кода верны → сессия.
   Future<AccountSession> confirm(
@@ -182,9 +183,9 @@ class AccountGatewayHttp implements AccountGateway {
         payments = payments ?? PaymentsApi();
 
   @override
-  Future<RegisterPending> register(
-          String email, String password, String phone, String deviceId) =>
-      auth.register(email, password, phone, deviceId);
+  Future<RegisterPending> register(String name, String email,
+          String password, String phone, String deviceId) =>
+      auth.register(name, email, password, phone, deviceId);
 
   @override
   Future<AccountSession> confirm(String email, String emailCode,
@@ -228,12 +229,14 @@ class AccountGatewayHttp implements AccountGateway {
 
   @override
   Future<Map<String, dynamic>> purchase(String token, String plan) async {
+    // Заказ + страница оплаты ЮKassa; подтверждение — только вебхуком
+    // (ручной confirm в billing удалён). Открывает controller по
+    // confirmation_url — так side-effect тестируем.
     final order = await payments.checkout(token, plan);
     final orderId = order['order_id'] as String;
     if (orderId.isEmpty) {
       throw const ApiException('Сервер не вернул order_id');
     }
-    await payments.confirm(token, orderId);
     return order;
   }
 }
@@ -256,10 +259,11 @@ class AuthApi {
   String get _base =>
       baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
 
-  Future<RegisterPending> register(
-      String email, String password, String phone, String deviceId) async {
+  Future<RegisterPending> register(String name, String email,
+      String password, String phone, String deviceId) async {
     try {
       final resp = await httpJsonPost('$_base/auth/register', json: {
+        'name': name,
         'email': email,
         'password': password,
         'phone': phone,
@@ -464,10 +468,6 @@ class PaymentsApi {
   Future<Map<String, dynamic>> checkout(String token, String plan) async {
     final j = await _post('/payments/checkout', token, {'plan': plan});
     return (j as Map).cast<String, dynamic>();
-  }
-
-  Future<void> confirm(String token, String orderId) async {
-    await _post('/payments/orders/$orderId/confirm', token, const {});
   }
 
   Future<Object?> _get(String path, String token) async {

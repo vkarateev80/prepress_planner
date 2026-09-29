@@ -24,7 +24,7 @@ Self-hosted auth «Препресс-Планер» (SaaS): аккаунты emai
 
 | Метод/путь | Запрос | Ответ |
 |---|---|---|
-| `POST /auth/register` | `{email, password, phone, org_name?, device_id?}` | `202 {pending:true, email, phone, dev_email_code?, dev_phone_code?, sms_sent}` — сессии НЕТ |
+| `POST /auth/register` | `{name, email, password, phone, org_name?, device_id?}` | `202 {pending:true, email, phone, dev_email_code?, dev_phone_code?, sms_sent}` — сессии НЕТ |
 | `POST /auth/confirm` | `{email, email_code, phone_code, device_id?}` | `201 {token, user{id,email}, orgs[{org_id,role}]}` / `400` неверный код / `404` нет регистрации / `409` уже подтверждён |
 | `POST /auth/confirm/resend` | `{email, channel:"email"\|"phone"}` | `200 {ok:true, dev_*_code?}` / `429` кулдаун |
 | `POST /auth/login` | `{email, password, device_id?}` | `200 {token, user, orgs[]}` (вытесняет прежние сессии — 1/1) / `403` аккаунт не подтверждён |
@@ -97,7 +97,7 @@ verified-метки и выдаёт сессию. `confirm/resend` — пере�
 ## Модель данных (SQLite)
 
 ```
-users(id, email UNIQUE, password_hash, created_at, updated_at,
+users(id, email UNIQUE, password_hash, name, created_at, updated_at,
       phone, email_verified_at, phone_verified_at)
 organizations(id, name, created_by, created_at, updated_at)
 memberships(id, org_id, user_id, role, invited_by, created_at,
@@ -135,7 +135,9 @@ verify_codes(id PK, channel 'email'|'phone', dest, user_id,
 | `PP_DEFAULT_ORG` | `1` | `1` — регистрация без `org_name` создаёт личную организацию; `0` — пользователь без организации |
 | `PP_SMTP_HOST/PORT/USER/PASSWORD/FROM` | — | Почта для сброса и подтверждения (SMTP) |
 | `PP_SMTP_SSL` | пусто | `1` = TLS сразу (порт 465) |
-| `PP_SMS_PROVIDER` | `dev` | `dev` — SMS не отправляется, код в ответе; точка подключения реального провайдера |
+| `PP_SMS_PROVIDER` | `dev` | `dev` — SMS не отправляется, код в ответе; `sms_ru` — реальная отправка через `https://sms.ru/sms/send` |
+| `PP_SMS_API_ID` | пусто | api_id личного кабинета sms.ru (обязателен при `sms_ru`) |
+| `PP_SMS_TEST` | пусто | `1` = `test=1` у sms.ru: проверка ответа без отправки и без списания |
 | `PP_RESEND_COOLDOWN` | `60` | Кулдаун переотправки кода подтверждения, секунд |
 
 ## Локальный запуск

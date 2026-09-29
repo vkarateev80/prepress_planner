@@ -5,11 +5,13 @@
 политика 1/1 (вход вытесняет прежние сессии), forgot/reset без dev_code,
 отзыв сессий, /auth/verify для внутренних сервисов, миграция legacy-БД.
 """
+import json
 import os
 import sqlite3
 import sys
 import tempfile
 import time
+import urllib.parse
 from pathlib import Path
 
 import pytest
@@ -68,8 +70,8 @@ def _register(email: str, password: str = "secret1", **extra) -> dict:
     _counter["n"] += 1
     phone = f"+7999{_counter['n']:07d}"
     r = client.post("/auth/register",
-                    json={"email": email, "password": password,
-                          "phone": phone, **extra})
+                    json={"name": "Тест Юзер", "email": email,
+                          "password": password, "phone": phone, **extra})
     assert r.status_code == 202, r.text
     pending = r.json()
     assert pending["pending"] is True
@@ -123,24 +125,38 @@ def test_register_duplicate_email_409_and_bad_input():
     email = _email("dup")
     _register(email)
     r = client.post("/auth/register",
-                    json={"email": email, "password": "secret1",
+                    json={"name": "Дубль", "email": email,
+                          "password": "secret1",
                           "phone": "+79991234567"})
     assert r.status_code == 409
 
     r = client.post("/auth/register",
-                    json={"email": "not-an-email", "password": "secret1",
+                    json={"name": "Иван", "email": "not-an-email",
+                          "password": "secret1",
                           "phone": "+79991234567"})
     assert r.status_code == 422
     r = client.post("/auth/register",
-                    json={"email": "a@b.co", "password": "123",
+                    json={"name": "Иван", "email": "a@b.co",
+                          "password": "123",
                           "phone": "+79991234567"})
     assert r.status_code == 422
-    # Обязательный телефон: пропущен → 422; мусор вместо номера → 422.
+    # Обязательные регистрационные данные: имя и телефон.
     r = client.post("/auth/register",
-                    json={"email": _email("nophone"), "password": "secret1"})
-    assert r.status_code == 422
+                    json={"email": _email("noname"), "password": "secret1",
+                          "phone": "+79991234567"})
+    assert r.status_code == 422  # нет name
     r = client.post("/auth/register",
-                    json={"email": _email("badphone"), "password": "secret1",
+                    json={"name": "   ", "email": _email("blankname"),
+                          "password": "secret1",
+                          "phone": "+79991234567"})
+    assert r.status_code == 422  # имя из пробелов
+    r = client.post("/auth/register",
+                    json={"name": "Иван", "email": _email("nophone"),
+                          "password": "secret1"})
+    assert r.status_code == 422  # нет phone
+    r = client.post("/auth/register",
+                    json={"name": "Иван", "email": _email("badphone"),
+                          "password": "secret1",
                           "phone": "12345678901"})
     assert r.status_code == 422
 
@@ -277,14 +293,16 @@ def test_register_without_org_when_default_org_disabled():
         "from fastapi.testclient import TestClient;"
         "from auth_app.main import app;"
         "c = TestClient(app);"
-        "r = c.post('/auth/register', json={'email':'solo@example.com',"
+        "r = c.post('/auth/register', json={'name':'Соло',"
+        "'email':'solo@example.com',"
         "'password':'secret1','phone':'+79990000001'});"
         "assert r.status_code == 202, r.text;"
         "p = r.json();"
         "c2 = c.post('/auth/confirm', json={'email':'solo@example.com',"
         "'email_code':p['dev_email_code'],'phone_code':p['dev_phone_code']});"
         "print(c2.status_code, c2.json()['orgs']);"
-        "r2 = c.post('/auth/register', json={'email':'team@example.com',"
+        "r2 = c.post('/auth/register', json={'name':'Команда',"
+        "'email':'team@example.com',"
         "'password':'secret1','phone':'+79990000002','org_name':'Team'});"
         "p2 = r2.json();"
         "c3 = c.post('/auth/confirm', json={'email':'team@example.com',"
@@ -820,7 +838,8 @@ def test_register_pending_requires_confirm_before_login():
     email = _email("pending")
     phone = "+79997770001"
     r = client.post("/auth/register", json={
-        "email": email, "password": "secret1", "phone": phone})
+        "name": "Пенд", "email": email, "password": "secret1",
+        "phone": phone})
     assert r.status_code == 202, r.text
     body = r.json()
     assert body["pending"] is True
@@ -873,7 +892,8 @@ def test_confirm_unknown_email_404_and_bad_codes_shape():
     # Неполный код (не 6 знаков) — 422.
     email = _email("shape")
     r = client.post("/auth/register", json={
-        "email": email, "password": "secret1", "phone": "+79997770002"})
+        "name": "Шейп", "email": email, "password": "secret1",
+        "phone": "+79997770002"})
     r = client.post("/auth/confirm", json={
         "email": email, "email_code": "123", "phone_code": "123456"})
     assert r.status_code == 422
@@ -884,7 +904,8 @@ def test_confirm_resend_cooldown_and_invalidates_old_code():
     email = _email("resend")
     phone = "+79997770003"
     r = client.post("/auth/register", json={
-        "email": email, "password": "secret1", "phone": phone})
+        "name": "Ресенд", "email": email, "password": "secret1",
+        "phone": phone})
     body = r.json()
     old_email_code = body["dev_email_code"]
 
@@ -924,3 +945,106 @@ def test_confirm_resend_cooldown_and_invalidates_old_code():
 def test_healthz_reports_sms_provider():
     body = client.get("/healthz").json()
     assert body["sms"] == "dev"
+
+
+# ---------- реальный SMS-провайдер (PP_SMS_PROVIDER=sms_ru) ----------
+
+def test_sms_real_provider_hides_dev_code(monkeypatch):
+    """У реального провайдера dev_phone_code не выдаётся даже при сбое
+    доставки (иначе SMS-подтверждение деградирует до показа кода)."""
+    import auth_app.main as m
+    monkeypatch.setattr(m, "SMS_PROVIDER", "sms_ru")
+    monkeypatch.setattr(m, "SMS_API_ID", "test-api-id")
+
+    def boom(phone, code):
+        raise RuntimeError("нет сети")
+
+    monkeypatch.setattr(m, "_send_sms", boom)
+    r = client.post("/auth/register", json={
+        "name": "Смс", "email": _email("smsboom"), "password": "secret1",
+        "phone": "+79997770099"})
+    assert r.status_code == 202, r.text
+    body = r.json()
+    assert body["sms_sent"] is False
+    assert "dev_phone_code" not in body
+
+
+def test_sms_real_provider_success_flag(monkeypatch):
+    import auth_app.main as m
+    monkeypatch.setattr(m, "SMS_PROVIDER", "sms_ru")
+    monkeypatch.setattr(m, "_send_sms", lambda phone, code: True)
+    r = client.post("/auth/register", json={
+        "name": "Смс", "email": _email("smsok"), "password": "secret1",
+        "phone": "+79997770098"})
+    assert r.status_code == 202, r.text
+    body = r.json()
+    assert body["sms_sent"] is True
+    assert "dev_phone_code" not in body
+
+
+def test_sms_ru_request_shape_and_error(monkeypatch):
+    """_send_sms(sms_ru): POST sms.ru/sms/send (api_id, to, msg, json=1);
+    ERROR-ответ провайдера → RuntimeError (sms_sent=false наверху)."""
+    import auth_app.main as m
+    monkeypatch.setattr(m, "SMS_PROVIDER", "sms_ru")
+    monkeypatch.setattr(m, "SMS_API_ID", "api-test-1")
+    monkeypatch.setattr(m, "SMS_TEST", False)
+    captured = {}
+
+    class _Resp:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps(self._payload).encode("utf-8")
+
+    def fake_ok(req, timeout=None):
+        captured["url"] = req.full_url
+        captured["data"] = req.data.decode("utf-8")
+        return _Resp({"status": "OK", "status_code": 100,
+                      "sms": {"79997770097": {"status": "OK",
+                                              "status_code": 100,
+                                              "sms_id": "42"}}})
+
+    monkeypatch.setattr(m.urllib.request, "urlopen", fake_ok)
+    assert m._send_sms("+79997770097", "654321") is True
+    assert captured["url"] == "https://sms.ru/sms/send"
+    qs = dict(urllib.parse.parse_qsl(captured["data"]))
+    assert qs["api_id"] == "api-test-1"
+    assert qs["to"] == "79997770097"
+    assert qs["json"] == "1"
+    assert "654321" in qs["msg"]
+    assert "test" not in qs  # PP_SMS_TEST не включён
+
+    def fake_error(req, timeout=None):
+        return _Resp({"status": "ERROR", "status_code": 201,
+                      "status_text": "Не хватает средств"})
+
+    monkeypatch.setattr(m.urllib.request, "urlopen", fake_error)
+    with pytest.raises(RuntimeError, match="Не хватает средств"):
+        m._send_sms("+79997770097", "654321")
+
+
+def test_register_stores_and_returns_name():
+    """Имя пользователя — часть регистрационных данных: хранится и отдаётся."""
+    email = _email("whoami")
+    r = client.post("/auth/register", json={
+        "name": "Иван Петров", "email": email, "password": "secret1",
+        "phone": "+79997770096"})
+    assert r.status_code == 202, r.text
+    pending = r.json()
+    rc = client.post("/auth/confirm", json={
+        "email": email,
+        "email_code": pending.get("dev_email_code", ""),
+        "phone_code": pending.get("dev_phone_code", ""),
+    })
+    assert rc.status_code == 201, rc.text
+    assert rc.json()["user"]["name"] == "Иван Петров"
+    me = client.get("/auth/me", headers=_auth(rc.json()["token"]))
+    assert me.json()["user"]["name"] == "Иван Петров"

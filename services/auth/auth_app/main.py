@@ -41,7 +41,8 @@ Legacy `services/license` (machine-id, офлайн-токены) в SaaS-пут
 запуска). Почта — smtplib/email из stdlib. Внешних пакетов для логики нет.
 
 API:
-  POST /auth/register          {email, password, phone, org_name?} → 202 pending
+  POST /auth/register          {name, email, password, phone, org_name?}
+                               → 202 pending
   POST /auth/confirm           {email, email_code, phone_code, device_id?}
                                                               → 201 {token, user, orgs}
   POST /auth/confirm/resend    {email, channel}               → {ok, dev_*_code?}
@@ -74,11 +75,13 @@ env:
   PP_SMTP_HOST/PORT/USER/PASSWORD/FROM — почта для сброса (STARTTLS 587)
   PP_SMTP_SSL      — 1 = сразу TLS (465)
   PP_SMS_PROVIDER  — dev (по умолчанию): SMS не отправляется, код в ответе
-                     register/resend; точка подключения реального провайдера
+                     register/resend; sms_ru — реальная отправка sms.ru
+                     (нужен PP_SMS_API_ID; PP_SMS_TEST=1 — test=1 провайдера)
   PP_RESEND_COOLDOWN — кулдаун переотправки кода подтверждения, с (60)
 """
 import hashlib
 import hmac
+import json
 import os
 import re
 import secrets
@@ -86,6 +89,8 @@ import smtplib
 import sqlite3
 import threading
 import time
+import urllib.parse
+import urllib.request
 from contextlib import asynccontextmanager
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -113,8 +118,13 @@ INVITE_TTL_S = 7 * 86400  # приглашения в организацию: 7 
 # 0 — пользователь без организации (memberships добавляются позже).
 DEFAULT_ORG = os.environ.get("PP_DEFAULT_ORG", "1").strip() != "0"
 # SMS: dev (по умолчанию) — реальной отправки нет, код в ответе register/
-# resend; провайдер подключается здесь же (см. _send_sms).
+# resend; sms_ru — реальная отправка через https://sms.ru/sms/send
+# (нужен PP_SMS_API_ID; PP_SMS_TEST=1 — режим test=1 провайдера: ответ
+# проверяется, но SMS не отправляется и баланс не расходуется).
 SMS_PROVIDER = os.environ.get("PP_SMS_PROVIDER", "dev").strip() or "dev"
+SMS_API_ID = os.environ.get("PP_SMS_API_ID", "").strip()
+SMS_TEST = os.environ.get("PP_SMS_TEST", "").strip() == "1"
+SMS_URL = "https://sms.ru/sms/send"
 RESEND_COOLDOWN_S = float(
     os.environ.get("PP_RESEND_COOLDOWN", "60").strip() or 60)
 
@@ -300,6 +310,9 @@ def _init_db():
         rc_cols = _columns(conn, "reset_codes")
         if "user_id" not in rc_cols:
             conn.execute("ALTER TABLE reset_codes ADD COLUMN user_id TEXT")
+        # Имя пользователя (регистрационные данные) — идемпотентно.
+        if "name" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN name TEXT")
         # Backfill: связываем legacy-коды с пользователями по email.
         conn.execute(
             "UPDATE reset_codes SET user_id = ("
@@ -568,20 +581,47 @@ def _verify_send_age(channel: str, dest: str) -> float:
 
 
 def _send_sms(phone: str, code: str) -> bool:
-    """Отправка SMS-кода подтверждения. Возвращает True, если отправлено.
+    """Отправка SMS-кода подтверждения. Возвращает True, если принято.
 
     PP_SMS_PROVIDER=dev (по умолчанию) — реальной отправки нет: код
-    возвращается клиенту в dev_phone_code. Точка подключения реального
-    провайдера (PP_SMS_PROVIDER=sms_ru|…): POST с PP_SMS_* — здесь.
+    возвращается клиенту в dev_phone_code. PP_SMS_PROVIDER=sms_ru —
+    POST https://sms.ru/sms/send (документация sms.ru/api/send):
+    api_id + to (7XXXXXXXXXX) + msg (UTF-8) + json=1; ответ
+    {status, status_code, sms: {номер: {status, status_code, ...}}}.
     """
     if SMS_PROVIDER == "dev":
         return False
-    raise RuntimeError(f"SMS-провайдер не реализован: {SMS_PROVIDER}")
+    if SMS_PROVIDER != "sms_ru":
+        raise RuntimeError(f"SMS-провайдер не поддержан: {SMS_PROVIDER}")
+    if not SMS_API_ID:
+        raise RuntimeError("PP_SMS_API_ID не задан")
+    to = phone.lstrip("+")
+    msg = (f"Препресс-Планер: код подтверждения {code}. "
+           f"Не сообщайте его никому.")
+    form = {"api_id": SMS_API_ID, "to": to, "msg": msg, "json": "1"}
+    if SMS_TEST:
+        form["test"] = "1"  # имитация: без отправки и без списания
+    req = urllib.request.Request(
+        SMS_URL,
+        data=urllib.parse.urlencode(form).encode("utf-8"),
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST")
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+    if str(payload.get("status")) == "OK":
+        per = (payload.get("sms") or {}).get(to) or {}
+        if str(per.get("status")) == "OK":
+            return True
+        raise RuntimeError(
+            f"SMS.ru: {per.get('status_text') or per.get('status_code')}")
+    raise RuntimeError(
+        f"SMS.ru: {payload.get('status_text') or payload.get('status_code')}")
 
 
 # ---------- модели ----------
 
 class RegisterIn(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
     email: str = Field(min_length=3, max_length=254)
     password: str = Field(min_length=6, max_length=128)
     phone: str = Field(min_length=10, max_length=20)
@@ -632,6 +672,7 @@ class InviteAcceptIn(BaseModel):
 
 def _user_row(row) -> dict:
     return {"id": row["id"], "email": row["email"],
+            "name": row["name"] or "",
             "created_at": row["created_at"]}
 
 
@@ -658,13 +699,13 @@ def _auth_dep(authorization: Optional[str] = Header(default=None)) -> dict:
         raise HTTPException(status_code=401, detail=str(e))
 
 
-def _create_user(conn, email: str, password: str) -> str:
+def _create_user(conn, email: str, password: str, name: str) -> str:
     user_id = secrets.token_hex(16)
     now = time.time()
     conn.execute(
-        "INSERT INTO users (id, email, password_hash, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (user_id, email, _hash_password(password), now, now))
+        "INSERT INTO users (id, email, password_hash, name, created_at, "
+        "updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (user_id, email, _hash_password(password), name, now, now))
     return user_id
 
 
@@ -680,6 +721,9 @@ def register(body: RegisterIn):
     email = body.email.lower().strip()
     _check_email(email)
     phone = _check_phone(body.phone)
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="Укажите имя пользователя")
     org_name = (body.org_name or "").strip() or None
     with _db_lock, _connect() as conn:
         existing = conn.execute(
@@ -687,7 +731,7 @@ def register(body: RegisterIn):
         if existing is not None:
             raise HTTPException(status_code=409,
                                 detail="Email уже зарегистрирован")
-        user_id = _create_user(conn, email, body.password)
+        user_id = _create_user(conn, email, body.password, name)
         conn.execute("UPDATE users SET phone = ? WHERE id = ?",
                      (phone, user_id))
         # Автоприём живых приглашений по email — в той же транзакции.
@@ -721,8 +765,10 @@ def register(body: RegisterIn):
     except Exception:
         sms_sent = False
     resp["sms_sent"] = sms_sent
-    if not sms_sent:
-        resp["dev_phone_code"] = phone_code  # PP_SMS_PROVIDER=dev
+    # Код в ответе — только в dev-режиме; у реального провайдера при сбое
+    # доставки код получить можно переотправкой (confirm/resend).
+    if SMS_PROVIDER == "dev" and not sms_sent:
+        resp["dev_phone_code"] = phone_code
     return resp
 
 
@@ -809,7 +855,7 @@ def confirm_resend(body: ConfirmResendIn):
         except Exception:
             sms_sent = False
         resp["sms_sent"] = sms_sent
-        if not sms_sent:
+        if SMS_PROVIDER == "dev" and not sms_sent:
             resp["dev_phone_code"] = code
     return resp
 
