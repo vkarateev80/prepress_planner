@@ -54,18 +54,18 @@ spec:
               value: http://auth:8121
             - name: YUKASSA_SHOP_ID
               valueFrom:
-                configMapKeyRef:
-                  name: pp-config
+                secretKeyRef:
+                  name: pp-secrets
                   key: YUKASSA_SHOP_ID
             - name: YUKASSA_SECRET_KEY
               valueFrom:
-                configMapKeyRef:
-                  name: pp-config
+                secretKeyRef:
+                  name: pp-secrets
                   key: YUKASSA_SECRET_KEY
             - name: YUKASSA_WEBHOOK_SECRET
               valueFrom:
-                configMapKeyRef:
-                  name: pp-config
+                secretKeyRef:
+                  name: pp-secrets
                   key: YUKASSA_WEBHOOK_SECRET
             - name: YUKASSA_API_URL
               valueFrom:

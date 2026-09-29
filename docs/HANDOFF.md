@@ -591,8 +591,11 @@ SMTP `mail.hosting.reg.ru:587` (auth healthz smtp:true). Бэкапы: cron 04:0
 (`deploy/k8s/backup.sh`, лог /var/log/pp-backup.log). Цены Pro 5000/50000.
 
 **Открытые направления (по приоритету):**
-1. Форма ЮKassa → ключи → `pp-config` → rollout billing → webhook →
-   тестовый платёж (без ключей checkout не работает).
+1. ~~Форма ЮKassa → ключи → rollout billing~~ — **КЛЮЧИ ПОДКЛЮЧЕНЫ**
+   (§20, VERIFICATION §15): `/v3/me` 200, живой checkout создаёт платёж.
+   Остаётся внешнее: регистрация вебхука
+   `https://prepressplan.ru/payments/webhook` (секрет в `pp-secrets`) и
+   тестовая оплата — статус приходит только вебхуком.
 2. ~~Push 8 коммитов~~ — **СДЕЛАНО**: `git fetch` 2026-09-28, `origin/main`
    синхронизирован с локальным `main` (0/0).
 3. Идентификация домена .ru через Госуслуги (предупреждение reg.ru;
@@ -698,4 +701,15 @@ legal-вкладке. Тесты 56/56.
 **Эскиз ТЭО (2026-09-28, VERIFICATION §14):** подпись габарита в графе 6
 при узких этикетках вылезала за бокс — фит-условие + вывод под бокс;
 регрессионный тест парсит PDF-поток (без фикса падает). Домен/e2e/
-domain-worker зелёные; прод — перевыкат `pp-domain-worker` после коммита.
+domain-worker зелёные; `pp-domain-worker` выкачен (`62f6551`), живой
+отчёт на проде проверен (VERIFICATION §14).
+
+## 20. ЮKassa: ключи подключены (2026-09-28)
+
+Секретный ключ и `shop_id=1453145` — в `pp-secrets` (в git нет;
+`21-billing.yaml` → secretKeyRef). `/v3/me` → 200, billing
+`configured: true`, живой checkout создал платёж (см. VERIFICATION §15).
+Осталось владельцу: зарегистрировать вебхук
+`https://prepressplan.ru/payments/webhook` (секрет — `YUKASSA_WEBHOOK_SECRET`
+в `pp-secrets`) и провести тестовую оплату — статус приходит только
+вебхуком.

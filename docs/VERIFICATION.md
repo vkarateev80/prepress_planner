@@ -533,3 +533,32 @@ register → confirm; SMS — **сначала dev-режим** (каркас п
 **Прогоны:** domain ALL PASS (16), e2e `E2E OK` (эталон 704.88),
 domain-worker 22/22 ALL PASS. Визуально (pypdfium2, PNG): узкий габарит —
 подпись под боксом, граница чистая; 50×30 — подпись внутри.
+
+**Деплой:** коммит `62f6551` (push), `pp-domain-worker` пересобран на
+сервере и выкачен (rollout Successful). Живая проверка на
+`prepressplan.ru`: `POST /api/projects/{id}/reports/pdf` (с
+`font_base64`) → 200, скачан PDF 801 297 байт, эскиз (стр. 2) — подпись
+внутри бокса, граница чистая.
+
+## 15. Подключение ключей ЮKassa (2026-09-28)
+
+Владелец передал секретный ключ (`live_…`) и `shop_id=1453145`.
+
+- Ключи записаны **только в k8s-секрет** `pp-secrets`
+  (`YUKASSA_SHOP_ID`, `YUKASSA_SECRET_KEY`, `YUKASSA_WEBHOOK_SECRET` —
+  последний сгенерирован на сервере, openssl rand -hex 24). В git
+  ключей нет: `01-config.yaml` очищен от `test_shop/test_secret`,
+  `21-billing.yaml` переведён на `secretKeyRef` (dry-run чистый).
+- Rollout billing: healthz → `configured: true, provider: yookassa,
+  webhook_signature: true, save_payment_method: false`.
+- **`GET https://api.yookassa.ru/v3/me` (Basic shop:secret) → 200** —
+  ключи валидны; `GET /payments/plans` → month 5000 / year 50000.
+- **Живой checkout**: `POST /payments/checkout {plan:month}` → 200,
+  заказ `72396983a3c04f9d887c0cc81c03ff51`, `confirmation_url`
+  `https://yoomoney.ru/checkout/payments/v2/contract?orderId=324d8dd4-000f-5001-9000-11cb1d270e41`
+  (создание платежа денег не списывает — они идут при оплате).
+- **Осталось внешнее:** регистрация вебхука в кабинете ЮKassa
+  (URL `https://prepressplan.ru/payments/webhook`, секрет — значение
+  `YUKASSA_WEBHOOK_SECRET` из `pp-secrets`) и тестовая оплата.
+  Статус заказа обновляется **только вебхуком** (опроса провайдера в
+  коде нет) — без регистрации вебхука оплата не подтвердится.

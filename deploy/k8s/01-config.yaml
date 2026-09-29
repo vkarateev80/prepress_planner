@@ -7,11 +7,10 @@ metadata:
 data:
   PP_PUBLIC_BASE: "https://prepressplan.ru"
   PP_RETURN_PATH: "/billing/return"
-  # ЮKassa: до подключения реальных ключей — значения по умолчанию;
-  # пустой WEBHOOK_SECRET → вебхук fail-closed (ADR-3).
-  YUKASSA_SHOP_ID: "test_shop"
-  YUKASSA_SECRET_KEY: "test_secret"
-  YUKASSA_WEBHOOK_SECRET: ""
+  # ЮKassa: несекретная часть остаётся в ConfigMap; SHOP_ID/SECRET_KEY/
+  # WEBHOOK_SECRET живут в секрете pp-secrets (см. 21-billing.yaml
+  # secretKeyRef) — в git не попадают. До подстановки реального shop_id
+  # значение "PENDING".
   YUKASSA_API_URL: "https://api.yookassa.ru/v3"
   YUKASSA_SAVE_PAYMENT_METHOD: "0"
   # SMTP хостинга reg.ru (проверено: AUTH 235 OK на mail.hosting.reg.ru:587,
