@@ -670,7 +670,7 @@ class ResetIn(BaseModel):
 
 class MemberAddIn(BaseModel):
     email: str = Field(min_length=3, max_length=254)
-    role: str = Field(default="member", pattern="^(member|viewer)$")
+    role: str = Field(default="member", pattern="^(member|viewer|admin)$")
 
 
 class InviteAcceptIn(BaseModel):
@@ -1017,7 +1017,7 @@ def add_member(org_id: str, body: MemberAddIn,
                user: dict = Depends(_auth_dep)):
     """Добавить участника (существующий email) или создать приглашение.
 
-    role — только member|viewer (иное 422). Приглашение живёт 7 дней;
+    role — member|viewer|admin (иное 422; admin назначает админ-панель). Приглашение живёт 7 дней;
     без SMTP код возвращается в ответе (dev-режим), с SMTP — уходит письмом.
     """
     email = body.email.lower().strip()

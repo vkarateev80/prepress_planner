@@ -261,6 +261,24 @@ services:
     # 8122 — только внутренняя сеть.
 
   # === Nginx (edge) — TLS-терминация, единый origin 443 (ADR-6) ===
+  admin:
+    build: ../services/admin  # админ-панель: мониторинг, аккаунты, подписки, БД
+    image: pp-admin:latest
+    environment:
+      AUTH_URL: http://auth:8121
+      DB_URL: postgresql://pp_user:${PP_DB_PASSWORD:-pp_secret}@postgresql:5432/prepress_saas
+      AUTH_DB_PATH: /srv/auth/data/auth.db
+    volumes:
+      # Тот же том, что у auth: revoke/delete сессий и аккаунтов пишут в auth.db.
+      - auth-data:/srv/auth/data
+    depends_on:
+      - auth
+      - postgresql
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8130/healthz', timeout=3)"]
+      interval: 15s
+
   web:
     image: nginx:alpine
     ports:

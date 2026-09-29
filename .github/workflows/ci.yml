@@ -74,6 +74,8 @@ jobs:
         run: python -m pytest services/payments/tests -q
       - name: Тесты API проектов и файлов (S3+PostgreSQL, изоляция по org, N-4)
         run: python -m pytest services/api/tests -q
+      - name: Тесты админ-панели
+        run: python -m pytest services/admin/tests -q
 
   deploy:
     name: Конфиги развёртывания (compose + nginx)

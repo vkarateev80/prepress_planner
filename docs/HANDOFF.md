@@ -749,3 +749,19 @@ test=1 через `PP_SMS_TEST`); dev_phone_code теперь только в de
 убраны (копирайт = ссылка на /legal, legal_screen удалён); `openPaywall`
 без входа открывает сначала вход — окно биллинга только авторизованным
 (сервер checkout и так за Bearer). Тесты 59/59.
+
+## 22. Админ-панель: отдельный сервис (2026-09-29)
+
+Запрос владельца: админка отдельным сервисом, доступ по роли admin/owner,
+полный набор. Реализован `services/admin` (:8130, HTML без сборки):
+гейт = owner/admin **системной организации (первой по created_at)**;
+обзор healthz, аккаунты (revoke/delete), доступы (прокси auth, роли
+member/viewer/admin — `MemberAddIn` расширен), подписки grant/revoke Pro,
+заказы, read-only БД (whitelist). Инфраструктура: `/admin` в 3 nginx,
+compose-сервис, `k8s/25-admin.yaml`, CI-шаг. Тесты admin 9/9, полный
+pytest **180 passed** (VERIFICATION §21).
+
+**На проде:** системная организация — org «k8s-accept…» (owner
+`k8s-accept-1790523361@example.com`); после деплоя в system org добавить
+`info@prepressplan.ru` (admin), иначе владелец не войдёт. URL:
+`https://prepressplan.ru/admin/`.

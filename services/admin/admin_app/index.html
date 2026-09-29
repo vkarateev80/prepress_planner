@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Админ-панель — Препресс-Планер</title>
+<style>
+  :root {
+    --bg: #f4f6fa; --card: #ffffff; --ink: #1c2430; --muted: #66707d;
+    --accent: #2f5fa8; --accent-ink: #ffffff; --line: #dfe5ee;
+    --ok: #1d7a3f; --bad: #b3362d; --warn: #a06a10;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.45 -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+         background: var(--bg); color: var(--ink); }
+  header { background: var(--card); border-bottom: 1px solid var(--line);
+           padding: 12px 20px; display: flex; align-items: center; gap: 16px; }
+  header h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  header .who { color: var(--muted); font-size: 13px; margin-left: auto; }
+  nav { display: flex; gap: 4px; padding: 10px 20px 0; flex-wrap: wrap; }
+  nav button { border: 1px solid var(--line); background: var(--card);
+               padding: 8px 14px; border-radius: 8px 8px 0 0; cursor: pointer;
+               font-size: 14px; color: var(--muted); }
+  nav button.on { color: var(--accent); border-bottom-color: var(--card);
+                  font-weight: 600; }
+  main { padding: 16px 20px 40px; }
+  .card { background: var(--card); border: 1px solid var(--line);
+          border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  h2 { font-size: 15px; margin: 0 0 12px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line);
+           vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 12.5px; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 10px;
+          font-size: 12px; font-weight: 600; }
+  .pill.ok { background: #e2f3e8; color: var(--ok); }
+  .pill.bad { background: #fbe6e4; color: var(--bad); }
+  .pill.warn { background: #f8efd9; color: var(--warn); }
+  .pill.mute { background: #eef1f6; color: var(--muted); }
+  input, select { border: 1px solid var(--line); border-radius: 8px;
+                  padding: 8px 10px; font-size: 14px; background: #fff; }
+  button.act { background: var(--accent); color: var(--accent-ink); border: 0;
+               border-radius: 8px; padding: 8px 14px; cursor: pointer;
+               font-size: 14px; }
+  button.act:hover { filter: brightness(1.08); }
+  button.ghost { background: transparent; color: var(--accent);
+                 border: 1px solid var(--line); border-radius: 8px;
+                 padding: 6px 10px; cursor: pointer; font-size: 13px; }
+  button.ghost.danger { color: var(--bad); }
+  button:disabled { opacity: .5; cursor: default; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .grid4 { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+           gap: 10px; }
+  .kpi { background: var(--bg); border: 1px solid var(--line);
+         border-radius: 10px; padding: 10px 12px; }
+  .kpi .n { font-size: 22px; font-weight: 700; }
+  .kpi .l { color: var(--muted); font-size: 12.5px; }
+  #msg { margin: 10px 0; font-size: 14px; min-height: 18px; }
+  #msg.err { color: var(--bad); } #msg.ok { color: var(--ok); }
+  .login-wrap { max-width: 380px; margin: 60px auto; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; }
+  td .mono { word-break: break-all; }
+  .hide { display: none; }
+</style>
+</head>
+<body>
+
+<div id="loginView" class="login-wrap">
+  <div class="card">
+    <h2>Вход в админ-панель</h2>
+    <p class="muted">Доступ — owner/admin системной организации. Обычные
+      пользователи сюда не попадают.</p>
+    <div id="msgLogin"></div>
+    <div class="row" style="flex-direction:column; align-items:stretch; gap:10px">
+      <input id="loginEmail" type="email" placeholder="Email" autocomplete="username">
+      <input id="loginPass" type="password" placeholder="Пароль" autocomplete="current-password">
+      <button class="act" id="loginBtn">Войти</button>
+    </div>
+  </div>
+</div>
+
+<div id="appView" class="hide">
+  <header>
+    <h1>Препресс-Планер — админка</h1>
+    <span class="who"><span id="whoami"></span> · <a href="#" id="logout">выйти</a></span>
+  </header>
+  <nav id="tabs">
+    <button data-t="overview" class="on">Обзор</button>
+    <button data-t="users">Аккаунты</button>
+    <button data-t="access">Доступы</button>
+    <button data-t="subs">Подписки</button>
+    <button data-t="orders">Заказы</button>
+    <button data-t="db">База данных</button>
+  </nav>
+  <main>
+    <div id="msg"></div>
+
+    <section id="t-overview">
+      <div class="card">
+        <h2>Сервисы стека (healthz)</h2>
+        <table id="svcTable"><thead><tr><th>Сервис</th><th>Статус</th>
+          <th>Ответ, мс</th></tr></thead><tbody></tbody></table>
+      </div>
+      <div class="card">
+        <h2>Счётчики</h2>
+        <div class="grid4" id="kpis"></div>
+      </div>
+    </section>
+
+    <section id="t-users" class="hide">
+      <div class="card">
+        <h2>Аккаунты</h2>
+        <div class="row" style="margin-bottom:10px">
+          <input id="userQuery" placeholder="Поиск по email или имени" style="min-width:260px">
+          <button class="act" id="userSearch">Найти</button>
+        </div>
+        <table><thead><tr><th>Email</th><th>Имя</th><th>Телефон</th>
+          <th>Создан</th><th>Сессии</th><th>Организации</th><th></th></tr></thead>
+          <tbody id="usersBody"></tbody></table>
+      </div>
+    </section>
+
+    <section id="t-access" class="hide">
+      <div class="card">
+        <h2>Доступы — системная организация <span id="sysOrgName" class="muted"></span></h2>
+        <div class="row" style="margin-bottom:10px">
+          <input id="accessEmail" type="email" placeholder="email пользователя" style="min-width:240px">
+          <select id="accessRole">
+            <option value="admin">admin (доступ в админку)</option>
+            <option value="member">member</option>
+            <option value="viewer">viewer</option>
+          </select>
+          <button class="act" id="accessAdd">Добавить / пригласить</button>
+        </div>
+        <table><thead><tr><th>Email</th><th>Имя</th><th>Роль</th>
+          <th>Добавлен</th><th></th></tr></thead>
+          <tbody id="accessBody"></tbody></table>
+        <p class="muted">Роль admin даёт полный доступ в эту панель.
+          Owner системной организации удалён быть не может.</p>
+      </div>
+    </section>
+
+    <section id="t-subs" class="hide">
+      <div class="card">
+        <h2>Подписки и Pro</h2>
+        <p class="muted">«Выдать Pro» включает права на 30/365 дней.
+          Возврат уплаченных средств выполняется только в кабинете ЮKassa.</p>
+        <table><thead><tr><th>Организация</th><th>Тариф</th><th>Статус</th>
+          <th>Период до</th><th>Pro до</th><th></th></tr></thead>
+          <tbody id="subsBody"></tbody></table>
+      </div>
+    </section>
+
+    <section id="t-orders" class="hide">
+      <div class="card">
+        <h2>Заказы</h2>
+        <div class="row" style="margin-bottom:10px">
+          <select id="orderStatus">
+            <option value="">все</option><option value="pending">pending</option>
+            <option value="paid">paid</option><option value="canceled">canceled</option>
+            <option value="refunded">refunded</option>
+          </select>
+          <button class="act" id="ordersLoad">Показать</button>
+        </div>
+        <table><thead><tr><th>Заказ</th><th>Организация</th><th>Тариф</th>
+          <th>Сумма</th><th>Статус</th><th>Создан</th></tr></thead>
+          <tbody id="ordersBody"></tbody></table>
+      </div>
+    </section>
+
+    <section id="t-db" class="hide">
+      <div class="card">
+        <h2>База данных (read-only)</h2>
+        <div class="row" style="margin-bottom:10px">
+          <select id="dbTable"></select>
+          <button class="act" id="dbLoad">Показать</button>
+          <span class="muted" id="dbMeta"></span>
+        </div>
+        <div style="overflow:auto">
+          <table><thead id="dbHead"></thead><tbody id="dbBody"></tbody></table>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+'use strict';
+let TOKEN = sessionStorage.getItem('adminToken') || '';
+let WHO = sessionStorage.getItem('adminWho') || '';
+const $ = (id) => document.getElementById(id);
+
+function msg(text, kind) {
+  const el = $('msg');
+  el.textContent = text || '';
+  el.className = kind || '';
+  if (text && kind === 'ok') setTimeout(() => { if (el.textContent === text) el.textContent = ''; }, 4000);
+}
+
+async function api(path, opts = {}) {
+  opts.headers = Object.assign({'Content-Type': 'application/json'},
+      TOKEN ? {'Authorization': 'Bearer ' + TOKEN} : {}, opts.headers || {});
+  let resp;
+  try { resp = await fetch(path, opts); }
+  catch (e) { throw new Error('Сервер недоступен'); }
+  let data = null;
+  try { data = await resp.json(); } catch (e) { /* пусто */ }
+  if (resp.status === 401 || resp.status === 403) {
+    if (path !== '/admin/api/login') { logout(false); }
+    throw new Error((data && data.detail) ||
+        (resp.status === 401 ? 'Требуется вход' : 'Нет доступа'));
+  }
+  if (!resp.ok) throw new Error((data && data.detail) || ('Ошибка ' + resp.status));
+  return data;
+}
+
+function esc(v) {
+  if (v === null || v === undefined) return '';
+  return String(v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function shortId(v) { v = String(v || ''); return v.length > 14 ? v.slice(0, 8) + '…' : v; }
+
+function showApp(email) {
+  $('loginView').classList.add('hide');
+  $('appView').classList.remove('hide');
+  $('whoami').textContent = email || WHO;
+  loadOverview();
+}
+
+function logout(notify) {
+  TOKEN = ''; WHO = '';
+  sessionStorage.removeItem('adminToken');
+  sessionStorage.removeItem('adminWho');
+  $('appView').classList.add('hide');
+  $('loginView').classList.remove('hide');
+  if (notify) msg('Вы вышли', 'ok');
+}
+
+async function doLogin() {
+  const loginMsg = $('msgLogin');
+  loginMsg.textContent = ''; loginMsg.className = '';
+  $('loginBtn').disabled = true;
+  try {
+    const data = await api('/admin/api/login', {
+      method: 'POST',
+      body: JSON.stringify({email: $('loginEmail').value.trim(),
+                            password: $('loginPass').value})
+    });
+    TOKEN = data.token; WHO = data.email;
+    sessionStorage.setItem('adminToken', TOKEN);
+    sessionStorage.setItem('adminWho', WHO);
+    showApp(WHO);
+  } catch (e) { loginMsg.textContent = e.message; loginMsg.className = 'err'; }
+  finally { $('loginBtn').disabled = false; }
+}
+
+// ---- вкладки ----
+document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('#tabs button').forEach(x => x.classList.remove('on'));
+  b.classList.add('on');
+  document.querySelectorAll('main section').forEach(s => s.classList.add('hide'));
+  $('t-' + b.dataset.t).classList.remove('hide');
+  msg('');
+  const t = b.dataset.t;
+  if (t === 'overview') loadOverview();
+  if (t === 'users') loadUsers();
+  if (t === 'access') loadAccess();
+  if (t === 'subs') loadSubs();
+  if (t === 'orders') loadOrders();
+  if (t === 'db') loadTables();
+}));
+
+// ---- обзор ----
+async function loadOverview() {
+  try {
+    const data = await api('/admin/api/overview');
+    const tb = $('svcTable').querySelector('tbody');
+    tb.innerHTML = data.services.map(s =>
+      `<tr><td>${esc(s.name)}</td>
+       <td><span class="pill ${s.ok ? 'ok' : 'bad'}">${s.ok ? 'ok' : 'down'}</span>
+       <span class="muted"> ${esc(s.status)}</span></td>
+       <td>${esc(s.ms)}</td></tr>`).join('');
+    const labels = {users: 'Пользователи', active_sessions: 'Активные сессии',
+      organizations: 'Организации', projects: 'Проекты', files: 'Файлы',
+      orders_pending: 'Заказы pending', orders_paid: 'Заказы paid',
+      pro_orgs: 'Pro-организации'};
+    $('kpis').innerHTML = Object.entries(data.counts).map(([k, v]) =>
+      `<div class="kpi"><div class="n">${esc(v)}</div>
+       <div class="l">${labels[k] || k}</div></div>`).join('');
+    $('sysOrgName').textContent = '«' + data.system_org.name + '»';
+    msg('', '');
+  } catch (e) { msg(e.message, 'err'); }
+}
+
+// ---- аккаунты ----
+async function loadUsers() {
+  try {
+    const data = await api('/admin/api/users?query=' +
+        encodeURIComponent($('userQuery').value.trim()));
+    $('usersBody').innerHTML = data.items.map(u => `
+      <tr>
+        <td>${esc(u.email)} ${u.verified ? '' : '<span class="pill warn">не подтв.</span>'}</td>
+        <td>${esc(u.name)}</td><td class="mono">${esc(u.phone)}</td>
+        <td>${esc((u.created_at || '').slice(0, 10))}</td>
+        <td>${esc(u.active_sessions)}</td>
+        <td class="muted">${esc((u.orgs || []).join(', '))}</td>
+        <td class="row" style="gap:6px;white-space:nowrap">
+          <button class="ghost" data-act="revoke" data-id="${esc(u.id)}"
+            data-email="${esc(u.email)}">Сбросить сессии</button>
+          <button class="ghost danger" data-act="del" data-id="${esc(u.id)}"
+            data-email="${esc(u.email)}">Удалить</button>
+        </td>
+      </tr>`).join('') || '<tr><td colspan="7" class="muted">Ничего не найдено</td></tr>';
+  } catch (e) { msg(e.message, 'err'); }
+}
+
+$('usersBody').addEventListener('click', async (ev) => {
+  const btn = ev.target.closest('button');
+  if (!btn) return;
+  const id = btn.dataset.id, email = btn.dataset.email;
+  try {
+    if (btn.dataset.act === 'revoke') {
+      const r = await api(`/admin/api/users/${id}/revoke-sessions`, {method: 'POST'});
+      msg(`Сессии (${email}) отозваны: ${r.revoked}`, 'ok');
+      loadUsers();
+    } else if (btn.dataset.act === 'del') {
+      if (!confirm(`Удалить аккаунт ${email}? Действие необратимо.`)) return;
+      const r = await api(`/admin/api/users/${id}`, {method: 'DELETE'});
+      msg(`Аккаунт ${r.email} удалён`, 'ok');
+      loadUsers();
+    }
+  } catch (e) { msg(e.message, 'err'); }
+});
+$('userSearch').addEventListener('click', loadUsers);
+$('userQuery').addEventListener('keydown', e => { if (e.key === 'Enter') loadUsers(); });
+
+// ---- доступы ----
+async function loadAccess() {
+  try {
+    const data = await api('/admin/api/access');
+    $('sysOrgName').textContent = '«' + data.system_org.name + '»';
+    $('accessBody').innerHTML = data.members.map(m => `
+      <tr><td>${esc(m.email)}</td><td>${esc(m.name || '')}</td>
+        <td><span class="pill ${m.role === 'owner' ? 'ok' : m.role === 'admin' ? 'warn' : 'mute'}">${esc(m.role)}</span></td>
+        <td>${esc(String(m.created_at || '').slice(0, 10))}</td>
+        <td>${m.role === 'owner' ? '' :
+          `<button class="ghost danger" data-uid="${esc(m.user_id)}">Убрать</button>`}</td>
+      </tr>`).join('');
+  } catch (e) { msg(e.message, 'err'); }
+}
+$('accessAdd').addEventListener('click', async () => {
+  const email = $('accessEmail').value.trim();
+  if (!email) { msg('Укажите email', 'err'); return; }
+  try {
+    const r = await api('/admin/api/access', {method: 'POST',
+      body: JSON.stringify({email, role: $('accessRole').value})});
+    msg(r.status === 'invited' ? 'Приглашение отправлено' :
+        'Участник добавлен с ролью ' + $('accessRole').value, 'ok');
+    $('accessEmail').value = '';
+    loadAccess();
+  } catch (e) { msg(e.message, 'err'); }
+});
+$('accessBody').addEventListener('click', async (ev) => {
+  const btn = ev.target.closest('button[data-uid]');
+  if (!btn) return;
+  if (!confirm('Убрать участника из системной организации?')) return;
+  try {
+    await api('/admin/api/access/' + btn.dataset.uid, {method: 'DELETE'});
+    msg('Участник убран', 'ok');
+    loadAccess();
+  } catch (e) { msg(e.message, 'err'); }
+});
+
+// ---- подписки ----
+async function loadSubs() {
+  try {
+    const data = await api('/admin/api/subscriptions');
+    $('subsBody').innerHTML = data.items.map(s => `
+      <tr>
+        <td>${esc(s.org_name)}<div class="muted mono">${esc(s.org_id)}</div></td>
+        <td>${esc(s.plan)}</td>
+        <td>${esc(s.status || '—')} ${s.cancel_at_period_end ? '<span class="pill warn">отмена</span>' : ''}</td>
+        <td>${esc(s.period_end || '—')}</td>
+        <td>${s.pro ? `<span class="pill ok">Pro до ${esc(s.until || '')}</span>`
+                    : '<span class="pill mute">Free</span>'}</td>
+        <td class="row" style="gap:6px;white-space:nowrap">
+          <button class="ghost" data-act="grant30" data-org="${esc(s.org_id)}">Pro +30 дн.</button>
+          <button class="ghost" data-act="grant365" data-org="${esc(s.org_id)}">Pro +365 дн.</button>
+          <button class="ghost danger" data-act="revoke" data-org="${esc(s.org_id)}">Отозвать</button>
+        </td>
+      </tr>`).join('') || '<tr><td colspan="6" class="muted">Пока нет записей</td></tr>';
+  } catch (e) { msg(e.message, 'err'); }
+}
+$('subsBody').addEventListener('click', async (ev) => {
+  const btn = ev.target.closest('button');
+  if (!btn) return;
+  const org = btn.dataset.org;
+  const act = btn.dataset.act;
+  const action = act === 'revoke' ? 'revoke' : 'grant';
+  const plan = act === 'grant365' ? 'year' : 'month';
+  const label = act === 'revoke' ? 'отозвать Pro' : `выдать Pro (${plan})`;
+  if (!confirm(`Подтвердите: ${label} для ${org}?`)) return;
+  try {
+    const r = await api('/admin/api/subscriptions', {method: 'POST',
+      body: JSON.stringify({org_id: org, action, plan})});
+    msg(r.action === 'grant'
+        ? `Pro выдан до ${r.until}`
+        : 'Pro отозван (возврат средств — в кабинете ЮKassa)', 'ok');
+    loadSubs();
+  } catch (e) { msg(e.message, 'err'); }
+});
+
+// ---- заказы ----
+async function loadOrders() {
+  try {
+    const data = await api('/admin/api/orders?status=' +
+        encodeURIComponent($('orderStatus').value));
+    $('ordersBody').innerHTML = data.items.map(o => `
+      <tr><td class="mono" title="${esc(o.id)}">${shortId(o.id)}</td>
+        <td>${esc(o.org_name)}</td><td>${esc(o.plan)}</td>
+        <td>${esc(o.amount_rub)} ₽</td>
+        <td><span class="pill ${o.status === 'paid' ? 'ok' :
+            o.status === 'pending' ? 'warn' : 'mute'}">${esc(o.status)}</span></td>
+        <td>${esc(String(o.created_at || '').slice(0, 19).replace('T', ' '))}</td></tr>`).join('')
+        || '<tr><td colspan="6" class="muted">Заказов нет</td></tr>';
+  } catch (e) { msg(e.message, 'err'); }
+}
+$('ordersLoad').addEventListener('click', loadOrders);
+
+// ---- база ----
+async function loadTables() {
+  try {
+    const data = await api('/admin/api/db/tables');
+    $('dbTable').innerHTML = data.tables.map(t =>
+      `<option value="${esc(t.table)}">${esc(t.table)} (${t.rows})</option>`).join('');
+    loadDb();
+  } catch (e) { msg(e.message, 'err'); }
+}
+async function loadDb() {
+  const table = $('dbTable').value;
+  if (!table) return;
+  try {
+    const data = await api(`/admin/api/db/${table}?limit=50`);
+    const cols = data.rows.length ? Object.keys(data.rows[0]) : [];
+    $('dbHead').innerHTML = '<tr>' + cols.map(c => `<th>${esc(c)}</th>`).join('') + '</tr>';
+    $('dbBody').innerHTML = data.rows.map(r =>
+      '<tr>' + cols.map(c => `<td class="mono">${esc(r[c])}</td>`).join('') + '</tr>').join('')
+      || '<tr><td class="muted">Пусто</td></tr>';
+    $('dbMeta').textContent = `первые ${data.count} строк (limit 50, whitelist)`;
+  } catch (e) { msg(e.message, 'err'); }
+}
+$('dbLoad').addEventListener('click', loadDb);
+
+// ---- boot ----
+$('loginBtn').addEventListener('click', doLogin);
+$('loginPass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+$('logout').addEventListener('click', e => { e.preventDefault(); logout(true); });
+if (TOKEN) {
+  api('/admin/api/overview').then(() => showApp(WHO)).catch(() => logout(false));
+}
+</script>
+</body>
+</html>

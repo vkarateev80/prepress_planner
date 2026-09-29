@@ -1,0 +1,82 @@
+# Админ-панель: мониторинг бэкенда, аккаунты, доступы, подписки, БД (read-only).
+# Отдельный сервис (по решению владельца). Гейт: owner/admin системной
+# (первой) организации; auth.db монтируется тому же PVC, что и auth.
+apiVersion: v1
+kind: Service
+metadata:
+  name: admin
+  namespace: prepress
+  labels:
+    app: admin
+spec:
+  selector:
+    app: admin
+  ports:
+    - port: 8130
+      targetPort: 8130
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: admin
+  namespace: prepress
+  labels:
+    app: admin
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: admin
+  template:
+    metadata:
+      labels:
+        app: admin
+    spec:
+      initContainers:
+        - name: wait-auth
+          image: busybox:1.36
+          command: ["sh", "-c", "until nc -z -w 2 auth 8121; do sleep 1; done"]
+        - name: wait-postgres
+          image: busybox:1.36
+          command: ["sh", "-c", "until nc -z -w 2 postgresql 5432; do sleep 1; done"]
+      containers:
+        - name: admin
+          image: pp-admin:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8130
+          env:
+            - name: AUTH_URL
+              value: http://auth:8121
+            - name: PP_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pp-secrets
+                  key: PP_DB_PASSWORD
+            - name: DB_URL
+              value: postgresql://pp_user:$(PP_DB_PASSWORD)@postgresql:5432/prepress_saas
+            - name: AUTH_DB_PATH
+              value: /srv/auth/data/auth.db
+          volumeMounts:
+            # Тот PVC, что у auth: операции revoke/delete пишут в auth.db
+            # (короткие транзакции; параллельная запись auth допустима).
+            - name: auth-data
+              mountPath: /srv/auth/data
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8130
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8130
+            initialDelaySeconds: 20
+            periodSeconds: 20
+      volumes:
+        - name: auth-data
+          persistentVolumeClaim:
+            claimName: auth-data

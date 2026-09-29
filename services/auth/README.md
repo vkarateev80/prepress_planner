@@ -36,7 +36,7 @@ Self-hosted auth «Препресс-Планер» (SaaS): аккаунты emai
 | `GET /auth/orgs` | Bearer | `200 {orgs:[{org_id,name,role,created_at}]}` |
 | `POST /auth/orgs` | Bearer `{name}` | `201 {org_id, name, role:"owner"}` |
 | `GET /auth/orgs/{org_id}/members` | Bearer (член org) | `200 {members:[{user_id,email,role,invited_by,created_at}]}` |
-| `POST /auth/orgs/{org_id}/members` | Bearer **owner/admin** `{email, role?}` (`member`/`viewer`) | `201 {status:"added"\|"invited", …}` — существующий пользователь добавляется сразу; неизвестный email → invite (TTL 7 дней, sha256 в БД; письмо при настроенном SMTP, иначе `code` в ответе — dev-режим) / `409` дубль |
+| `POST /auth/orgs/{org_id}/members` | Bearer **owner/admin** `{email, role?}` (`member`/`viewer`) | `201 {status:"added"\|"invited", …}` — роли `member`/`viewer`/`admin` (admin назначает админ-панель); существующий пользователь добавляется сразу; неизвестный email → invite (TTL 7 дней, sha256 в БД; письмо при настроенном SMTP, иначе `code` в ответе — dev-режим) / `409` дубль |
 | `POST /auth/orgs/{org_id}/invites/accept` | Bearer `{code}` | `200 {ok, org_id, role}`; `403` email не совпал, `404` код, `409` истёк/принят/уже участник. Автоприём — при регистрации по email invite'а |
 | `DELETE /auth/orgs/{org_id}/members/{user_id}` | Bearer **owner/admin** | `200 {ok:true}`; `409` последний owner |
 | `POST /auth/verify` | Bearer (внутренний вызов billing/api) | `200 {sub, email, orgs:[{org_id,role}]}` |

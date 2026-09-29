@@ -610,6 +610,13 @@ def test_add_existing_member_and_duplicate_409():
                     headers=_auth(owner["token"]))
     assert r.status_code == 201 and r.json()["member"]["role"] == "viewer"
 
+    # role=admin допустим (админ-панель назначает админов системной org).
+    adm = _register(_email("a-admin"))
+    r = client.post(f"/auth/orgs/{org_id}/members",
+                    json={"email": adm["user"]["email"], "role": "admin"},
+                    headers=_auth(owner["token"]))
+    assert r.status_code == 201 and r.json()["member"]["role"] == "admin"
+
 
 def test_invite_unknown_email_code_in_dev_mode_and_hash_in_db():
     owner = _register(_email("i-owner"), org_name="Типография-приглашения")
@@ -677,8 +684,8 @@ def test_invite_forbidden_for_member_and_invalid_role():
                     headers=_auth(member["token"]))
     assert r.status_code == 403
 
-    # Невалидная роль — 422 (допустимы только member|viewer).
-    for bad in ("admin", "owner", "guest", ""):
+    # Невалидная роль — 422 (допустимы member|viewer|admin).
+    for bad in ("owner", "guest", ""):
         r = client.post(f"/auth/orgs/{org_id}/members",
                         json={"email": _email("p-bad"), "role": bad},
                         headers=_auth(owner["token"]))

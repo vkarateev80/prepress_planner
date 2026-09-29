@@ -710,3 +710,30 @@ healthz auth → `sms: sms_ru`. Смоук-регистрация (test=1, фе�
   стабильно отдаёт чужую вкладку (известная нестабильность).
 - **Прогоны:** analyze 0, `flutter test` **59/59** (+2: без входа →
   экран «Аккаунт», не paywall; после входа → paywall), `build web` OK.
+
+## 21. Админ-панель: отдельный сервис (2026-09-29)
+
+**Запрос владельца:** админка — отдельный сервис; доступ по роли
+admin/owner; полный набор (мониторинг бэкенда, аккаунты, доступы, БД,
+подписки).
+
+- **Новый сервис `services/admin`** (FastAPI, :8130, HTML-панель без
+  сборки): гейт — вход через auth + роль owner/admin в **системной
+  (первой по created_at) организации** (новые пользователи — owner только
+  своей организации — в панель не попадают). auth.db монтируется тем же
+  PVC (read-запросы + короткие write-транзакции revoke/delete);
+  PostgreSQL — по `DB_URL`.
+- Эндпоинты: `login`, `overview` (healthz web/api/auth/billing/converter/
+  domain-worker/minio + счётчики), `users` (поиск/сессии/revoke/delete с
+  каскадом; owner системной организации удалить нельзя), `access` (прокси
+  auth API: роли member/viewer/admin), `subscriptions` (grant/revoke Pro
+  прямой правкой проекции; возвраты — кабинет ЮKassa), `orders`, `db/tables`
+  + `db/{table}` (whitelist, read-only, limit≤200), `healthz`, HTML `/admin/`.
+- **auth**: `MemberAddIn.role` расширен до `member|viewer|admin` (admin
+  назначает панель; owner через API по-прежнему нельзя), тест +3.
+- **Инфраструктура**: `location /admin` в трёх nginx-конфигах
+  (k8s/compose/tls), compose-сервис `admin`, k8s `25-admin.yaml`
+  (Deployment+Service, init-контейнеры wait-auth/postgres, PVC auth-data),
+  CI-строка `pytest services/admin/tests`.
+- **Прогоны:** `pytest services/admin/tests` — **9/9**; auth — 34; полный
+  контур — см. §21.1 (прогон после деплоя).
