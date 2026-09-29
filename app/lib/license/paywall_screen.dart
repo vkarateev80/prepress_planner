@@ -8,11 +8,17 @@ import 'entitlement_store.dart';
 import 'license_controller.dart';
 
 /// Открывает полноэкранный paywall; покупка идёт через контроллер.
-/// Если аккаунт не нужен/не вошёл — сначала открывается вход, затем покупка
-/// повторяется автоматически.
+/// Без входа окно биллинга НЕ открывается: сначала экран входа
+/// (или регистрации), и только после успешного авторизации — paywall.
 Future<void> openPaywall(
-    BuildContext context, LicenseController license) {
-  return Navigator.of(context).push(MaterialPageRoute<void>(
+    BuildContext context, LicenseController license) async {
+  if (!license.loggedIn) {
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => AccountScreen(license: license),
+    ));
+    if (!context.mounted || !license.loggedIn) return; // закрыли вход
+  }
+  await Navigator.of(context).push(MaterialPageRoute<void>(
     builder: (_) => PaywallScreen(
       timer: license.timer,
       onPurchase: (p) async {

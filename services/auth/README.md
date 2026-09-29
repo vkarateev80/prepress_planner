@@ -138,6 +138,7 @@ verify_codes(id PK, channel 'email'|'phone', dest, user_id,
 | `PP_SMS_PROVIDER` | `dev` | `dev` — SMS не отправляется, код в ответе; `sms_ru` — реальная отправка через `https://sms.ru/sms/send` |
 | `PP_SMS_API_ID` | пусто | api_id личного кабинета sms.ru (обязателен при `sms_ru`) |
 | `PP_SMS_TEST` | пусто | `1` = `test=1` у sms.ru: проверка ответа без отправки и без списания |
+| `PP_SMS_FROM` | пусто | Буквенный отправитель sms.ru (раздел «Отправители»); нужен при коде 221 |
 | `PP_RESEND_COOLDOWN` | `60` | Кулдаун переотправки кода подтверждения, секунд |
 
 ## Локальный запуск

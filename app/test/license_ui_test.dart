@@ -80,7 +80,8 @@ void main() {
     dir.deleteSync(recursive: true);
   });
 
-  testWidgets('шапка: чип триала; тап открывает paywall', (tester) async {
+  testWidgets('без входа чип триала открывает вход, а не биллинг',
+      (tester) async {
     final dir = Directory.systemTemp.createTempSync('pp_ui');
     final lic = LicenseController(
       store: EntitlementStore('${dir.path}/st'),
@@ -99,7 +100,44 @@ void main() {
     await tester.tap(find.textContaining('Триал:'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
+    // Защита: окно биллинга без авторизации не открывается.
+    expect(find.text('Препресс-Планер Pro'), findsNothing);
+    expect(find.text('Аккаунт'), findsOneWidget);
+    dir.deleteSync(recursive: true);
+  });
+
+  testWidgets('после входа чип открывает окно биллинга (paywall)',
+      (tester) async {
+    final dir = Directory.systemTemp.createTempSync('pp_ui_pay');
+    final fake = acc.FakeGateway();
+    final lic = LicenseController(
+      store: EntitlementStore('${dir.path}/st'),
+      client: LicenseClient(),
+      gateway: fake,
+      stateDir: '${dir.path}/st',
+    );
+    await tester.runAsync(() async {
+      await lic.init();
+      await lic.register('Владелец', 'paywall@example.com', 'secret1',
+          '+79991234001');
+      await lic.confirm(
+          acc.FakeGateway.devEmailCode, acc.FakeGateway.devPhoneCode);
+    });
+    expect(lic.loggedIn, true);
+    await tester.pumpWidget(MaterialApp(
+      home: HomeShell(
+        store: ProjectStore('${dir.path}/pr'),
+        license: lic,
+      ),
+    ));
+    await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 200)));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.textContaining('Триал:'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
     expect(find.text('Препресс-Планер Pro'), findsOneWidget);
+    expect(find.text('Аккаунт'), findsNothing);
     dir.deleteSync(recursive: true);
   });
 
@@ -177,7 +215,7 @@ void main() {
     expect(lic.loggedIn, true); // ещё не проверяли
 
     // Тап по вкладке → ensureSession → 401 → сброс.
-    await tester.tap(find.text('Юридическая'));
+    await tester.tap(find.text('Раскрой'));
     await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 300)));
     await tester.pump(const Duration(milliseconds: 100));

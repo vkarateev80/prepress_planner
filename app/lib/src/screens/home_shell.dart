@@ -14,7 +14,6 @@ import '../projects/project.dart';
 import '../widgets/log_window.dart';
 import 'geometry_screen.dart';
 import 'layout_screen.dart';
-import 'legal/legal_screen.dart';
 import 'projects_screen.dart';
 import 'reports_screen.dart';
 import 'teo_screen.dart';
@@ -151,10 +150,10 @@ class _HomeShellState extends State<HomeShell>
       ),
       TeoScreen(project: project, onChange: _update),
       ReportsScreen(project: project, store: widget.store),
-      const LegalScreen(),
     ];
 
-    // Футер со ссылкой на правовую информацию
+    // Футер: юр. информация открывается по копирайту (отдельная ссылка
+    // и вкладка убраны по решению владельца).
     Widget footer(BuildContext context) {
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -174,24 +173,18 @@ class _HomeShellState extends State<HomeShell>
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Expanded(
-              child: TextButton.icon(
-                icon: const Icon(Icons.article_outlined, size: 16),
-                label: const Text('Юридическая информация'),
-                onPressed: () {
-                  // Web: открыть в новой вкладке; desktop: системный браузер.
-                  openUrlExternal('https://prepressplan.ru/legal');
-                },
-                style: TextButton.styleFrom(
-                  foregroundColor: Theme.of(context).colorScheme.primary,
-                ),
+            TextButton(
+              onPressed: () {
+                // Web: открыть в новой вкладке; desktop: системный браузер.
+                openUrlExternal('https://prepressplan.ru/legal');
+              },
+              style: TextButton.styleFrom(
+                foregroundColor:
+                    Theme.of(context).colorScheme.onSurfaceVariant,
               ),
-            ),
-            const SizedBox(width: 16),
-            Text(
-              '\u00A9 ${DateTime.now().year} Препресс-Планер',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              child: Text(
+                '\u00A9 ${DateTime.now().year} Препресс-Планер',
+                style: Theme.of(context).textTheme.bodySmall,
               ),
             ),
           ],
@@ -258,9 +251,6 @@ class _HomeShellState extends State<HomeShell>
                         NavigationRailDestination(
                             icon: Icon(Icons.description_outlined),
                             label: Text('Отчёты')),
-                        NavigationRailDestination(
-                            icon: Icon(Icons.article_outlined),
-                            label: Text('Юридическая')),
                       ],
                     ),
                     const VerticalDivider(width: 1),
@@ -290,8 +280,6 @@ class _HomeShellState extends State<HomeShell>
                     icon: Icon(Icons.calculate_outlined), label: 'ТЭО'),
                 NavigationDestination(
                     icon: Icon(Icons.description_outlined), label: 'Отчёты'),
-                NavigationDestination(
-                    icon: Icon(Icons.article_outlined), label: 'Юридическая информация'),
               ],
             ),
           ],

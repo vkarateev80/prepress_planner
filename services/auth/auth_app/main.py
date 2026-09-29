@@ -76,7 +76,8 @@ env:
   PP_SMTP_SSL      — 1 = сразу TLS (465)
   PP_SMS_PROVIDER  — dev (по умолчанию): SMS не отправляется, код в ответе
                      register/resend; sms_ru — реальная отправка sms.ru
-                     (нужен PP_SMS_API_ID; PP_SMS_TEST=1 — test=1 провайдера)
+                     (нужен PP_SMS_API_ID; PP_SMS_TEST=1 — test=1 провайдера;
+                     PP_SMS_FROM — буквенный отправитель при коде 221)
   PP_RESEND_COOLDOWN — кулдаун переотправки кода подтверждения, с (60)
 """
 import hashlib
@@ -124,6 +125,10 @@ DEFAULT_ORG = os.environ.get("PP_DEFAULT_ORG", "1").strip() != "0"
 SMS_PROVIDER = os.environ.get("PP_SMS_PROVIDER", "dev").strip() or "dev"
 SMS_API_ID = os.environ.get("PP_SMS_API_ID", "").strip()
 SMS_TEST = os.environ.get("PP_SMS_TEST", "").strip() == "1"
+# Буквенный отправитель sms.ru (раздел «Отправители»); пусто — отправитель
+# по умолчанию. Нужен, если в аккаунте включена обязательная буквенная
+# отправка (код 221).
+SMS_FROM = os.environ.get("PP_SMS_FROM", "").strip()
 SMS_URL = "https://sms.ru/sms/send"
 RESEND_COOLDOWN_S = float(
     os.environ.get("PP_RESEND_COOLDOWN", "60").strip() or 60)
@@ -599,6 +604,8 @@ def _send_sms(phone: str, code: str) -> bool:
     msg = (f"Препресс-Планер: код подтверждения {code}. "
            f"Не сообщайте его никому.")
     form = {"api_id": SMS_API_ID, "to": to, "msg": msg, "json": "1"}
+    if SMS_FROM:
+        form["from"] = SMS_FROM
     if SMS_TEST:
         form["test"] = "1"  # имитация: без отправки и без списания
     req = urllib.request.Request(

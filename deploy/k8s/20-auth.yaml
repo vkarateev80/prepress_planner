@@ -79,6 +79,16 @@ spec:
                 configMapKeyRef:
                   name: pp-config
                   key: PP_SMS_PROVIDER
+            - name: PP_SMS_TEST
+              valueFrom:
+                configMapKeyRef:
+                  name: pp-config
+                  key: PP_SMS_TEST
+            - name: PP_SMS_API_ID
+              valueFrom:
+                secretKeyRef:
+                  name: pp-secrets
+                  key: PP_SMS_API_ID
             - name: PP_RESEND_COOLDOWN
               valueFrom:
                 configMapKeyRef:
