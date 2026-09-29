@@ -397,16 +397,24 @@ class LicenseController extends ChangeNotifier {
     if (g != null && s != null) {
       _busy = true;
       notifyListeners();
+      // Синхронно, до первого await: захват окна в рамках жеста клика —
+      // иначе Safari/Chrome блокируют window.open после сетевого запроса.
+      final grabbed = grabPopupWindow();
       try {
         // Заказ + открытие страницы оплаты ЮKassa (confirmation_url).
         // Подтверждение — только вебхуком; триал не трогаем (quiet), пока
         // платёж не подтверждён.
         final order = await g.purchase(s.token, period);
         final url = (order['confirmation_url'] as String?) ?? '';
-        if (url.isNotEmpty) openUrl(url);
+        if (url.isNotEmpty) {
+          openUrl(url); // web: навигация предзахваченного окна
+        } else if (grabbed) {
+          releasePopupWindow();
+        }
         await _refreshFromServer(quiet: true);
         return null;
       } on Exception catch (e) {
+        if (grabbed) releasePopupWindow();
         _accountError = e.toString();
         return e.toString();
       } finally {

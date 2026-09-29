@@ -3,6 +3,11 @@ library;
 
 import 'dart:io';
 
+/// На desktop popup-блокировки нет — предзахват не нужен.
+bool grabPopupWindow() => false;
+
+void releasePopupWindow() {}
+
 void openUrlExternal(String url) {
   final String program;
   final List<String> args;
