@@ -62,6 +62,15 @@ SIGNATURE_HEADERS = (
     "x-hmac-sha256",
 )
 
+# Какой статус объекта у ЮKassa подтверждает событие вебхука
+# (анти-фрод: тело уведомления не источник истины).
+_EXPECTED_STATUS = {
+    "payment.succeeded": frozenset({"succeeded"}),
+    "payment.canceled": frozenset({"canceled", "closed"}),
+    "payment.waiting_for_capture": frozenset({"waiting_for_capture"}),
+    "refund.succeeded": frozenset({"succeeded"}),
+}
+
 
 # --------------------------------------------------------------------------
 # Подпись вебхука
@@ -91,10 +100,12 @@ def _strip_algorithm(value: str) -> str:
 
 def verify_webhook_signature(raw_body: bytes, headers: Mapping[str, str],
                              secret: str) -> None:
-    """Проверка HMAC-SHA256 подписи вебхука (constant-time).
+    """Опциональная проверка HMAC-SHA256 подписи (constant-time).
 
-    Пустой секрет → 503 (fail closed): без настроенного `YUKASSA_WEBHOOK_SECRET`
-    сервис не принимает уведомления и не подменяет проверку «тестовым» режимом.
+    Вызывается, только если подпись прислана в заголовке (ЮKassa её не шлёт —
+    основная защита — сверка объекта у провайдера). Пустой секрет → 503
+    (fail closed): при присланной подписи без `YUKASSA_WEBHOOK_SECRET`
+    уведомление не принимается.
     """
     if not secret:
         raise ProviderNotConfigured(
@@ -179,7 +190,7 @@ class PaymentProvider:
     # -- вебхук -----------------------------------------------------------
     def process_webhook(self, raw_body: bytes,
                         headers: Mapping[str, str]) -> Dict[str, Any]:
-        """Проверить подпись и нормализовать уведомление провайдера."""
+        """Проверить уведомление провайдера и нормализовать событие."""
         raise NotImplementedError
 
     # -- возврат ----------------------------------------------------------
@@ -214,7 +225,7 @@ class PaymentProvider:
 # --------------------------------------------------------------------------
 
 class YooKassaProvider(PaymentProvider):
-    """ЮKassa: POST /payments, POST /refunds, вебхуки с HMAC-подписью."""
+    """ЮKassa: POST /payments, POST /refunds; вебхук — сверка у провайдера."""
 
     name = "yookassa"
 
@@ -243,7 +254,9 @@ class YooKassaProvider(PaymentProvider):
             raise ProviderNotConfigured(
                 "ЮKassa не настроена: задайте YUKASSA_SHOP_ID и YUKASSA_SECRET_KEY")
         url = f"{self.api_url}{path}"
-        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        # GET — без тела (сверка объектов вебхука: GET /payments|/refunds/{id}).
+        data = (None if method == "GET"
+                else json.dumps(payload, ensure_ascii=False).encode("utf-8"))
         headers = {
             "Authorization": self._auth_header(),
             "Content-Type": "application/json",
@@ -329,14 +342,43 @@ class YooKassaProvider(PaymentProvider):
     # -- вебхук -----------------------------------------------------------
     def process_webhook(self, raw_body: bytes,
                         headers: Mapping[str, str]) -> Dict[str, Any]:
-        verify_webhook_signature(raw_body, headers, self.webhook_secret)
+        """Вебхук ЮKassa: сверка объекта у провайдера (ЮKassa не шлёт HMAC).
+
+        ЮKassa официально не подписывает тела уведомлений (рекомендации —
+        проверка статуса объекта или IP). Анти-фрод: событие принимается,
+        только если объект существует у ЮKassa и его актуальный статус
+        (GET /payments|/refunds/{id} нашими ключами) подтверждает событие.
+        Если подпись прислана (шлюз/прокси) и секрет задан — сверяем её
+        дополнительно (fail closed, см. verify_webhook_signature).
+        """
+        if extract_signature(headers):
+            verify_webhook_signature(raw_body, headers, self.webhook_secret)
         try:
             payload = json.loads(raw_body.decode("utf-8"))
         except (ValueError, UnicodeDecodeError) as exc:
             raise WebhookPayloadError("Тело вебхука не является JSON") from exc
         if not isinstance(payload, dict):
             raise WebhookPayloadError("Тело вебхука должно быть объектом JSON")
-        return normalize_event(payload)
+        event_name = str(payload.get("event") or "").strip()
+        kind = event_name.split(".", 1)[0] if event_name else ""
+        if kind not in ("payment", "refund"):
+            # Чужие события (payout и пр.) main молча игнорирует — не трогаем API.
+            return normalize_event(payload)
+        obj = payload.get("object")
+        obj_id = str(obj.get("id") or "") if isinstance(obj, dict) else ""
+        if not event_name or not obj_id:
+            raise WebhookPayloadError("Уведомление без event/id объекта")
+        path = (f"/payments/{obj_id}" if kind == "payment"
+                else f"/refunds/{obj_id}")
+        trusted = self._request("GET", path, {})
+        trusted_status = str(trusted.get("status") or "")
+        expected = _EXPECTED_STATUS.get(event_name)
+        if expected is not None and trusted_status not in expected:
+            raise WebhookPayloadError(
+                f"Статус объекта {obj_id} ({trusted_status}) не подтверждает "
+                f"событие {event_name}")
+        # Все данные события берём из ответа API, а не из тела вебхука.
+        return normalize_event({"event": event_name, "object": trusted})
 
     # -- возврат ----------------------------------------------------------
     def refund(self, payment_id: str, amount_rub: int, order_id: str = "",
@@ -375,6 +417,7 @@ class YooKassaProvider(PaymentProvider):
             "provider": self.name,
             "configured": self.configured,
             "api_url": self.api_url,
+            "webhook_auth": "provider_recheck",
             "webhook_signature": bool(self.webhook_secret),
             "save_payment_method": self.save_payment_method,
         }
@@ -407,12 +450,9 @@ class UnconfiguredProvider(PaymentProvider):
 
     def process_webhook(self, raw_body: bytes,
                         headers: Mapping[str, str]) -> Dict[str, Any]:
-        verify_webhook_signature(raw_body, headers, self.webhook_secret)
-        try:
-            payload = json.loads(raw_body.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError) as exc:
-            raise WebhookPayloadError("Тело вебхука не является JSON") from exc
-        return normalize_event(payload)
+        # Без ключей API сверку объекта провести нельзя — уведомления не
+        # принимаем (fail closed, никакого dev-режима).
+        raise ProviderNotConfigured(self._MESSAGE)
 
     def get_subscription(self, org_id: str) -> Dict[str, Any]:
         view = super().get_subscription(org_id)

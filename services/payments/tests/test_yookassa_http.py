@@ -47,11 +47,17 @@ class _StubHandler(BaseHTTPRequestHandler):
     responses: List[Any] = []
 
     def do_POST(self) -> None:  # noqa: N802 (интерфейс BaseHTTPRequestHandler)
+        self._handle("POST")
+
+    def do_GET(self) -> None:  # noqa: N802 (сверка объектов вебхука)
+        self._handle("GET")
+
+    def _handle(self, method: str) -> None:
         length = int(self.headers.get("Content-Length") or 0)
-        raw = self.rfile.read(length).decode("utf-8")
+        raw = self.rfile.read(length).decode("utf-8") if length else ""
         type(self).requests.append({
             "path": self.path,
-            "method": "POST",
+            "method": method,
             "authorization": self.headers.get("Authorization"),
             "idempotence_key": self.headers.get("Idempotence-Key"),
             "content_type": self.headers.get("Content-Type"),
@@ -282,36 +288,51 @@ def test_webhook_without_secret_is_rejected(store):
     assert "YUKASSA_WEBHOOK_SECRET" in str(exc.value)
 
 
-def test_process_webhook_normalizes_payment_and_refund(store):
+def test_process_webhook_normalizes_payment_and_refund(api, store):
+    """Вебхук: подпись (если есть) → GET объекта у «ЮKassa» → нормализация.
+
+    Данные события берутся из ответа GET, а не из тела уведомления.
+    """
     secret = "whsec"
     provider = YooKassaProvider(store, shop_id=SHOP_ID, secret_key=SECRET_KEY,
-                                webhook_secret=secret)
+                                webhook_secret=secret, api_url=api)
+    _StubHandler.responses = [(200, {
+        "id": "pay-9", "status": "succeeded", "paid": True,
+        "amount": {"value": "9900.00", "currency": "RUB"},
+        "metadata": {"order_id": "order-9", "org_id": "org-9", "plan": "year"},
+        "payment_method": {"id": "pm-9", "saved": True},
+    })]
     payment_body = json.dumps({
         "event": "payment.succeeded",
-        "object": {"id": "pay-9", "status": "succeeded", "paid": True,
-                   "amount": {"value": "9900.00", "currency": "RUB"},
-                   "metadata": {"order_id": "order-9", "org_id": "org-9",
-                                "plan": "year"},
-                   "payment_method": {"id": "pm-9", "saved": True}},
+        "object": {"id": "pay-9", "status": "succeeded"},
     }).encode()
-    event = provider.process_webhook(payment_body, {"X-Signature": compute_signature(secret, payment_body)})
+    event = provider.process_webhook(
+        payment_body, {"X-Signature": compute_signature(secret, payment_body)})
     assert event["event"] == "payment.succeeded"
     assert event["provider_payment_id"] == "pay-9"
     assert event["provider_order_id"] == "pay-9"
     assert event["amount_rub"] == 9900 and event["currency"] == "RUB"
     assert event["order_id"] == "order-9" and event["plan"] == "year"
     assert event["payment_method_id"] == "pm-9" and event["saved_payment_method"] is True
+    sent = _StubHandler.requests[-1]
+    assert sent["method"] == "GET" and sent["path"].endswith("/payments/pay-9")
 
+    _StubHandler.responses = [(200, {
+        "id": "refund-9", "payment_id": "pay-9", "status": "succeeded",
+        "amount": {"value": "9900.00", "currency": "RUB"},
+    })]
     refund_body = json.dumps({
         "event": "refund.succeeded",
-        "object": {"id": "refund-9", "payment_id": "pay-9", "status": "succeeded",
-                   "amount": {"value": "9900.00", "currency": "RUB"}},
+        "object": {"id": "refund-9", "payment_id": "pay-9", "status": "succeeded"},
     }).encode()
-    refund = provider.process_webhook(refund_body, {"X-Signature": compute_signature(secret, refund_body)})
+    refund = provider.process_webhook(
+        refund_body, {"X-Signature": compute_signature(secret, refund_body)})
     assert refund["kind"] == "refund"
     assert refund["provider_payment_id"] == "refund-9"
     assert refund["payment_id"] == "pay-9"
     assert refund["provider_order_id"] == "pay-9"
+    sent = _StubHandler.requests[-1]
+    assert sent["method"] == "GET" and sent["path"].endswith("/refunds/refund-9")
 
 
 def test_normalize_event_rejects_garbage():

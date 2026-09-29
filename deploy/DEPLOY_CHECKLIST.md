@@ -8,7 +8,13 @@
    pending** (dev-коды в ответе, если SMTP/SMS dev-режимные), затем
    `POST /auth/confirm` `{email,email_code,phone_code}` → **201** с
    `token` + `orgs`; `login` до confirm → 403.
-6. Проверить billing webhook: зарегистрировать `https://<domain>/payments/webhook` в ЮKassa; протестировать checkout + webhook с `YUKASSA_WEBHOOK_SECRET`. Чеки (`receipt`) включены по умолчанию (`YUKASSA_RECEIPT_ENABLED=1`, НДС — `YUKASSA_RECEIPT_VAT_CODE`); автоплатежи — `YUKASSA_SAVE_PAYMENT_METHOD=1` (требует активации сохранения способов оплаты у мерчанта ЮKassa).
+6. Проверить billing webhook: раздел кабинета ЮKassa **Интеграция →
+   HTTP-уведомления** → URL `https://<domain>/payments/webhook` + события
+   (`payment.succeeded`, `payment.canceled`, `payment.waiting_for_capture`,
+   `refund.succeeded`, `payment_method.active`). Секрет в кабинете НЕ нужен:
+   billing сверяет статус объекта у API ЮKassa (`YUKASSA_WEBHOOK_SECRET` —
+   только для опциональной подписи, если её присылает шлюз); протестировать
+   checkout → оплату → вебхук. Чеки (`receipt`) включены по умолчанию (`YUKASSA_RECEIPT_ENABLED=1`, НДС — `YUKASSA_RECEIPT_VAT_CODE`); автоплатежи — `YUKASSA_SAVE_PAYMENT_METHOD=1` (требует активации сохранения способов оплаты у мерчанта ЮKassa).
 7. Проверить E2E: `POST /api/projects` → upload → `/calculate` → delta = 0.0.
 8. Мониторинг: проверить `/healthz` у каждого сервиса; проверить логи `docker compose logs -f`.
 9. Резервные копии: `bash deploy/backup.sh` — `pg_dump` для `postgresql` + `aws s3 sync` для bucket MinIO; offsite-вынос на внешнее S3 — переменные `PP_OFFSITE_*` (см. `deploy/README.md`). Крон: `0 4 * * * cd /opt/stack/deploy && bash backup.sh >> /var/log/pp-backup.log 2>&1`.
@@ -23,7 +29,8 @@
    `PP_DOMAIN=… PP_ACME_EMAIL=… bash deploy/nginx/get_prod_certs.sh` (п.2).
 2. **ЮKassa**: получить `YUKASSA_SHOP_ID`/`YUKASSA_SECRET_KEY` в кабинете,
    задать `YUKASSA_WEBHOOK_SECRET` (любая случайная строка, та же — в `.env`),
-   зарегистрировать webhook `https://<domain>/payments/webhook`; при
+   в кабинете: Интеграция → HTTP-уведомления →
+   `https://<domain>/payments/webhook` + события (см. п.6); при
    необходимости подключить у мерчанта автоплатежи (шаг 6) — иначе
    `YUKASSA_SAVE_PAYMENT_METHOD=0`.
 3. **SMTP**: аккаунт транзакционного провайдера → `PP_SMTP_*` в `.env`;

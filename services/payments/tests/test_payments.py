@@ -14,7 +14,8 @@
 Токены не гоняются по сети: `verify_token` подменяется фейком, возвращающим
 `{sub, email, orgs:[{org_id, role}]}` как это делает auth `POST /auth/verify`.
 Провайдер тоже фейковый (`PaymentProvider`), но подпись и разбор уведомления
-используют ПРОДАКШН-код (`verify_webhook_signature`, `normalize_event`).
+используют ПРОДАКШН-код (`normalize_event`, сверка объекта у провайдера;
+опциональный HMAC — только если подпись прислана).
 """
 import hashlib
 import hmac
@@ -54,7 +55,10 @@ import payments_app.main as pm  # noqa: E402
 from payments_app import store as store_mod  # noqa: E402
 from payments_app.main import STORE, app  # noqa: E402
 from payments_app.provider import (PaymentProvider, UnconfiguredProvider,  # noqa: E402
-                                   normalize_event, verify_webhook_signature)
+                                   ProviderError, WebhookPayloadError,
+                                   WebhookSignatureError, YooKassaProvider,
+                                   extract_signature, normalize_event,
+                                   verify_webhook_signature)
 
 WEBHOOK_SECRET = "test-webhook-secret"
 client = TestClient(app)
@@ -82,7 +86,8 @@ def auth(token: str) -> Dict[str, str]:
 
 
 class FakeYooKassa(PaymentProvider):
-    """Фейковый ЮKassa: без сети, но с реальной проверкой подписи и разбором."""
+    """Фейковый ЮKassa: без сети; семантика вебхука как у продакшн-провайдера —
+    опциональная подпись (если прислана) + сверка существования объекта."""
 
     name = "yookassa-fake"
 
@@ -101,7 +106,8 @@ class FakeYooKassa(PaymentProvider):
             from payments_app.provider import ProviderError
             raise ProviderError("ЮKassa недоступна: тестовый сбой")
         payment_id = f"pay-{order['id']}"
-        self.created.append({"order_id": order["id"], "plan": plan["plan"],
+        self.created.append({"id": payment_id,
+                             "order_id": order["id"], "plan": plan["plan"],
                              "amount_rub": order["amount_rub"],
                              "return_url": return_url,
                              "customer_email": customer_email})
@@ -110,13 +116,32 @@ class FakeYooKassa(PaymentProvider):
                 "confirmation_url": f"https://yookassa.test/confirm/{payment_id}"}
 
     def process_webhook(self, raw_body: bytes, headers) -> Dict[str, Any]:
-        verify_webhook_signature(raw_body, headers, self.webhook_secret)
-        return normalize_event(json.loads(raw_body.decode("utf-8")))
+        # ЮKassa подпись не шлёт: если прислана (шлюз/тест) — сверяем.
+        if extract_signature(headers):
+            verify_webhook_signature(raw_body, headers, self.webhook_secret)
+        try:
+            payload = json.loads(raw_body.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError) as exc:
+            from payments_app.provider import WebhookPayloadError
+            raise WebhookPayloadError("Тело не JSON") from exc
+        # Сверка объекта у «провайдера» (в реальном провайдере — GET …/{id}).
+        event_name = str((payload or {}).get("event") or "")
+        obj = (payload or {}).get("object") or {}
+        obj_id = str(obj.get("id") or "")
+        kind = event_name.split(".", 1)[0]
+        if kind == "payment" and not any(c.get("id") == obj_id
+                                         for c in self.created):
+            raise ProviderError(f"Платёж {obj_id} не найден у провайдера")
+        if kind == "refund" and not any(r.get("id") == obj_id
+                                        for r in self.refunds):
+            raise ProviderError(f"Возврат {obj_id} не найден у провайдера")
+        return normalize_event(payload)
 
     def refund(self, payment_id: str, amount_rub: int, order_id: str = "",
                idempotence_key: str = "") -> Dict[str, Any]:
         refund_id = f"refund-{payment_id}"
-        self.refunds.append({"payment_id": payment_id, "amount_rub": amount_rub,
+        self.refunds.append({"id": refund_id, "payment_id": payment_id,
+                             "amount_rub": amount_rub,
                              "order_id": order_id, "idempotence_key": idempotence_key})
         return {"refund_id": refund_id, "status": self.refund_status,
                 "raw": {"id": refund_id, "payment_id": payment_id,
@@ -384,15 +409,31 @@ def test_webhook_rejects_bad_signature(fake_provider):
     assert subscription(token)["status"] == "trialing"
 
 
-def test_webhook_rejects_missing_signature(fake_provider):
+def test_webhook_unsigned_accepted_via_recheck(fake_provider):
+    """Путь ЮKassa: подпись не присылается — защита = сверка объекта.
+
+    Платёж создан через checkout (существует у «провайдера») → событие
+    принимается без заголовка подписи.
+    """
     token = "t:org-nosig:owner"
     order = checkout(token)
     body = payment_event(f"pay-{order['order_id']}", order["order_id"], order["org_id"])
-    assert post_webhook(body, secret=None).status_code == 401
+    response = post_webhook(body, secret=None)
+    assert response.status_code == 200, response.text
+    assert subscription(token)["status"] == "active"
+
+
+def test_webhook_unknown_payment_502(fake_provider):
+    """Объект не найден у провайдера → 502 (ЮKassa ретраит; заказ не тронут)."""
+    token = "t:org-ghostpay:owner"
+    checkout(token)
+    response = post_webhook(payment_event("pay-ghost", "order-ghost", "org-ghost"))
+    assert response.status_code == 502
+    assert subscription(token)["status"] == "trialing"
 
 
 def test_webhook_fail_closed_without_secret():
-    """Без YUKASSA_WEBHOOK_SECRET вебхук не принимается (никакого dev-режима)."""
+    """Присланная подпись при пустом YUKASSA_WEBHOOK_SECRET → 503 (fail closed)."""
     app.dependency_overrides[pm.get_provider] = lambda: FakeYooKassa(
         STORE, webhook_secret="")
     try:
@@ -403,13 +444,24 @@ def test_webhook_fail_closed_without_secret():
 
 
 def test_webhook_unknown_order_404(fake_provider):
-    response = post_webhook(payment_event("pay-unknown", "order-unknown", "org-unknown"))
+    """Платёж существует у провайдера, а заказ удалён из нашей БД → 404."""
+    token = "t:org-unknown-order:owner"
+    order = checkout(token)
+    with STORE.db.tx() as conn:
+        conn.execute("DELETE FROM orders WHERE id = ?", (order["order_id"],))
+    body = payment_event(f"pay-{order['order_id']}", order["order_id"],
+                         order["org_id"])
+    response = post_webhook(body)
     assert response.status_code == 404
 
 
 def test_webhook_unknown_event_ignored(fake_provider):
-    payload = payment_event("pay-ignored", "order-ignored", "org-ignored",
-                            event="payment.waiting_for_capture", status="waiting_for_capture")
+    token = "t:org-ignored:owner"
+    order = checkout(token)
+    payload = payment_event(f"pay-{order['order_id']}", order["order_id"],
+                            order["org_id"],
+                            event="payment.waiting_for_capture",
+                            status="waiting_for_capture")
     response = post_webhook(payload)
     assert response.status_code == 200
     assert response.json().get("ignored") == "payment.waiting_for_capture"
@@ -569,6 +621,87 @@ def test_refund_without_payments_conflict(fake_provider):
     response = client.post("/payments/refunds", json={},
                            headers=auth("t:org-refund-empty:owner"))
     assert response.status_code == 409
+
+
+# --------------------------------------------------------------------------
+# Продакшн-провайдер: вебхук = сверка у ЮKassa API (ЮKassa не шлёт HMAC)
+# --------------------------------------------------------------------------
+
+def _real_provider() -> YooKassaProvider:
+    return YooKassaProvider(STORE, shop_id="1453145", secret_key="test-key",
+                            webhook_secret=WEBHOOK_SECRET)
+
+
+def _trusted_payment(status: str = "succeeded") -> Dict[str, Any]:
+    return {"id": "p-1", "status": status,
+            "amount": {"value": "990.00", "currency": "RUB"},
+            "metadata": {"order_id": "o-1", "org_id": "g-1", "plan": "month"},
+            "payment_method": {"id": "pm-1", "saved": True}}
+
+
+def test_real_provider_unsigned_rechecks_via_api(monkeypatch):
+    """Путь ЮKassa: без подписи → GET /payments/{id}, данные из ответа API."""
+    prov = _real_provider()
+    calls = []
+
+    def fake_request(method, path, payload, idempotence_key=""):
+        calls.append((method, path))
+        return _trusted_payment("succeeded")
+
+    monkeypatch.setattr(prov, "_request", fake_request)
+    body = json.dumps(payment_event("p-1", "o-1", "g-1")).encode()
+    event = prov.process_webhook(body, {})  # заголовков подписи нет
+    assert calls == [("GET", "/payments/p-1")]
+    assert event["event"] == "payment.succeeded"
+    assert event["status"] == "succeeded"
+    assert event["order_id"] == "o-1"  # метаданные — из ответа API, не из тела
+
+
+def test_real_provider_rejects_status_mismatch(monkeypatch):
+    """Тело кричит «succeeded», у ЮKassa статус pending → отбрасываем (422)."""
+    prov = _real_provider()
+    monkeypatch.setattr(prov, "_request",
+                        lambda *a, **k: _trusted_payment("pending"))
+    body = json.dumps(payment_event("p-1", "o-1", "g-1")).encode()
+    with pytest.raises(WebhookPayloadError):
+        prov.process_webhook(body, {})
+
+
+def test_real_provider_unknown_object_is_provider_error(monkeypatch):
+    prov = _real_provider()
+
+    def raise_404(method, path, payload, idempotence_key=""):
+        raise ProviderError("ЮKassa вернула ошибку 404: not found")
+
+    monkeypatch.setattr(prov, "_request", raise_404)
+    body = json.dumps(payment_event("p-404", "o-1", "g-1")).encode()
+    with pytest.raises(ProviderError):
+        prov.process_webhook(body, {})
+
+
+def test_real_provider_wrong_signature_rejected(monkeypatch):
+    """Подпись прислана, но неверная — отклоняем (дополнение к сверке API)."""
+    prov = _real_provider()
+    body = json.dumps(payment_event("p-1", "o-1", "g-1")).encode()
+    with pytest.raises(WebhookSignatureError):
+        prov.process_webhook(body, {"X-Signature": "0" * 64})
+
+
+def test_real_provider_refund_rechecks_refund_path(monkeypatch):
+    prov = _real_provider()
+    calls = []
+
+    def fake_request(method, path, payload, idempotence_key=""):
+        calls.append(path)
+        return {"id": "r-1", "payment_id": "p-1", "status": "succeeded",
+                "amount": {"value": "990.00", "currency": "RUB"}}
+
+    monkeypatch.setattr(prov, "_request", fake_request)
+    body = json.dumps(refund_event("r-1", "p-1")).encode()
+    event = prov.process_webhook(body, {})
+    assert calls == ["/refunds/r-1"]
+    assert event["event"] == "refund.succeeded"
+    assert event["provider_payment_id"] == "r-1"
 
 
 # --------------------------------------------------------------------------

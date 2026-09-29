@@ -1,8 +1,8 @@
 # Сервис оплаты / billing (ЮKassa)
 
 Подписка Pro «Препресс-Планер» для организаций (мультитенантность).
-**Заглушка удалена**: реальный платёжный провайдер ЮKassa, вебхук с проверкой
-подписи, идемпотентные транзакции, продление подписки, возвраты и
+**Заглушка удалена**: реальный платёжный провайдер ЮKassa, вебхук со сверкой
+объекта у провайдера, идемпотентные транзакции, продление подписки, возвраты и
 entitlement-синхронизация прав.
 
 Основание: **PRD v2** (F-20, F-21, F-22) и **System Design v1**
@@ -14,7 +14,7 @@ entitlement-синхронизация прав.
 | Было (заглушка) | Стало (ADR-3) |
 |---|---|
 | `POST /payments/orders/{id}/confirm` — «тестовая оплата» | **удалено**; права даёт только вебхук ЮKassa (или ручное продление в БД) |
-| `POST /payments/webhook {order_id}` без подписи | `POST /payments/webhook` — тело ЮKassa + **HMAC-SHA256 подпись**; без секрета вебхук отклоняется (fail closed) |
+| `POST /payments/webhook {order_id}` без подписи | `POST /payments/webhook` — тело ЮKassa **не источник истины**: событие принимается только после сверки объекта у ЮKassa API (`GET /payments|/refunds/{id}` + статус). ЮKassa не шлёт HMAC; если подпись прислана шлюзом — сверяется дополнительно (fail closed при пустом секрете) |
 | Подписка по `user_id`, без организаций | подписка по **`org_id`** (организация из `POST /auth/verify`) |
 | Одна таблица `orders` + `subscriptions(user_id)` | `orders`, `transactions`, `subscriptions`, `entitlements`, `plans` (System Design §13.2) |
 | Нет возвратов | `POST /payments/subscription/refund` (`POST /payments/refunds`) → `POST /refunds` ЮKassa |
@@ -30,7 +30,7 @@ entitlement-синхронизация прав.
 | `payments_app/config.py` | env-настройки, тарифы, фичи гейтинга, нормализация планов/статусов |
 | `payments_app/db.py` | слой БД: SQLite (`PP_DATA_DIR`) или PostgreSQL (`DB_URL`), DDL, миграция заглушки |
 | `payments_app/store.py` | бизнес-логика: триал, заказы, идемпотентные транзакции, продление, возвраты, entitlements |
-| `payments_app/provider.py` | интерфейс `PaymentProvider`, `YooKassaProvider` (urllib, без SDK), `UnconfiguredProvider`, подпись/разбор вебхука |
+| `payments_app/provider.py` | интерфейс `PaymentProvider`, `YooKassaProvider` (urllib, без SDK), `UnconfiguredProvider`, сверка вебхука у провайдера + разбор |
 | `payments_app/main.py` | FastAPI-эндпоинты, авторизация через auth, структурированные логи |
 
 ## API
@@ -47,7 +47,7 @@ entitlement-синхронизация прав.
 | `GET /payments/free-plan` | — | тариф Free и его лимиты | — |
 | `POST /payments/checkout` | Bearer `{plan, org_id?}` | `{order_id, confirmation_url, amount_rub, plan, status:"pending", …}` | 401/403/409/422/502/503 |
 | `GET /payments/orders/{id}` | Bearer `?org_id=` | `{order_id, plan, amount_rub, currency, status, confirmation_url, …}` | 401/403/404 |
-| `POST /payments/webhook` | тело ЮKassa + подпись | `{ok:true}` / `{ok:true, already:true}` | 401 (подпись), 404 (заказ), 413, 422, 502/503 |
+| `POST /payments/webhook` | тело ЮKassa (сверка у провайдера) | `{ok:true}` / `{ok:true, already:true}` | 401 (неверная присланная подпись), 404 (заказ), 413, 422 (событие/статус не подтверждён), 502 (провайдер/404), 503 (не настроена) |
 | `GET /payments/subscription` | Bearer `?org_id=` | `{plan, plan_alias, status, pro, trial_active, trial_ends_at, until, current_period_end, cancel_at_period_end, features}` | 401/403/409 |
 | `GET /payments/entitlement` | Bearer `?org_id=` | `{plan, status, pro, trial_active, features, until}` | 401/403/409 |
 | `GET /entitlement` | Bearer `?org_id=` | то же (алиас для внутренних вызовов) | 401/403/409 |
@@ -66,7 +66,12 @@ entitlement-синхронизация прав.
 1. `POST /payments/checkout` → заказ `pending` (`provider_order_id` = id платежа
    ЮKassa) → клиенту `confirmation_url`.
 2. Пользователь платит на стороне ЮKassa → уведомление `POST /payments/webhook`:
-   * проверка **HMAC-SHA256** по сырому телу (`YUKASSA_WEBHOOK_SECRET`); заголовки
+   * **сверка у провайдера**: `GET /payments|/refunds/{id}` нашими ключами —
+     статус объекта должен подтверждать событие (тело уведомления не
+     источник истины; ЮKassa HMAC не шлёт — офиц. документация рекомендует
+     именно проверку статуса/IP); если подпись прислана (шлюз) —
+     дополнительно **HMAC-SHA256** по сырому телу (`YUKASSA_WEBHOOK_SECRET`);
+     заголовки
      `X-Signature` / `Content-Signature` / `X-Webhook-Signature` /
      `X-Yookassa-Signature`, допустим префикс `sha256=`; пустой секрет → 503;
    * поиск заказа по `provider_order_id` (fallback — `metadata.order_id`, если
@@ -132,7 +137,7 @@ entitlement-синхронизация прав.
 | `PP_DATA_DIR` | `<сервис>/data` | каталог SQLite (`payments.db`) |
 | `YUKASSA_SHOP_ID` | пусто | shopId ЮKassa (Basic-аутентификация) |
 | `YUKASSA_SECRET_KEY` | пусто | секретный ключ ЮKassa (только env/секрет-менеджер) |
-| `YUKASSA_WEBHOOK_SECRET` | пусто | секрет HMAC-SHA256 вебхука; пусто → 503 |
+| `YUKASSA_WEBHOOK_SECRET` | пусто | секрет HMAC для ОПЦИОНАЛЬНОЙ подписи (сверяется, только если подпись прислана; основная защита — сверка объекта у API); прислана подпись + пусто → 503 |
 | `YUKASSA_API_URL` | `https://api.yookassa.ru/v3` | API ЮKassa (замена для песочницы/тестов) |
 | `YUKASSA_SAVE_PAYMENT_METHOD` | `0` | `1` — просить сохранить способ оплаты (автоплатежи; нужна активация у мерчанта) |
 | `YUKASSA_RECEIPT_ENABLED` | `1` | `0` — не добавлять объект `receipt` (чек) в создание платежа |
@@ -188,7 +193,8 @@ python -m pytest tests -q                                  # SQLite (по умо
 PP_TEST_DB_URL=postgresql://… python -m pytest tests -q    # та же сюита на PostgreSQL
 ```
 
-51 тест: тарифы и checkout, подпись вебхука (и отказ без секрета),
+57 тестов: тарифы и checkout, вебхук (подпись опциональна, сверка объекта
+у провайдера в т.ч. на продакшн-провайдере),
 идемпотентность и продление от конца периода, триал → Free → Pro,
 отмена/возобновление, возврат (owner/admin; «в обработке» → вебхук), изоляция
 тенантов, отсутствие legacy `/confirm`, чек ЮKassa (`receipt`, ADR-3) и

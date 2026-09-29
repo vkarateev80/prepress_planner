@@ -713,3 +713,10 @@ domain-worker зелёные; `pp-domain-worker` выкачен (`62f6551`), ж�
 `https://prepressplan.ru/payments/webhook` (секрет — `YUKASSA_WEBHOOK_SECRET`
 в `pp-secrets`) и провести тестовую оплату — статус приходит только
 вебхуком.
+
+**Вебхук ЮKassa (§20 продолжение, VERIFICATION §16):** кабинет — раздел
+«Интеграция → HTTP-уведомления» (вкладки «Webhooks» нет), форма заполнена
+владельцем. ЮKassa не шлёт HMAC — billing переведён на сверку объекта
+через API (GET /payments|/refunds/{id} + статус); подпись опциональна.
+Payments 57 тестов, полный pytest 167. Осталось: деплой billing + живая
+проверка + оплата владельцем.

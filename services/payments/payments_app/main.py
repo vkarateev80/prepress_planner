@@ -262,7 +262,11 @@ def get_order(order_id: str, org_id: Optional[str] = Query(default=None),
 @app.post("/payments/webhook")
 async def webhook(request: FastAPIRequest,
                   provider: PaymentProvider = Depends(get_provider)) -> Dict[str, Any]:
-    """Уведомление ЮKassa: подпись HMAC-SHA256 → идемпотентная обработка."""
+    """Уведомление ЮKassa: сверка объекта у провайдера → идемпотентная обработка.
+
+    Тело уведомления не источник истины: провайдер перезапрашивает платёж/
+    возврат у ЮKassa API и сверяет статус (ЮKassa не подписывает HMAC).
+    """
     db_ready()
     raw = await request.body()
     if len(raw) > config.WEBHOOK_MAX_BYTES:
