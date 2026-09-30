@@ -493,14 +493,6 @@ class _GeometryScreenState extends State<GeometryScreen> {
                   _busy || project.rawPaths.isEmpty ? null : () => _recognize(project)),
         ),
         Tooltip(
-          message: 'Замкнуть разомкнутые контуры, удалить «мусор» и скруглить '
-              'острые углы. Результат — контуры, готовые к раскрою.',
-          child: ActionChip(
-              avatar: const Icon(Icons.healing, size: 18),
-              label: const Text('Вылечить всё'),
-              onPressed: _busy ? null : () => _heal(project)),
-        ),
-        Tooltip(
           message: 'Пересобрать сетку из мастер-контура (массив на отдельном '
               'слое ARRAY). Используется, если после распознавания вы '
               'изменили параметры раскроя.',
@@ -896,72 +888,6 @@ class _GeometryScreenState extends State<GeometryScreen> {
     }
   }
 
-  Future<void> _heal(Project project) async {
-    // Массив извлечён — дальше работаем ТОЛЬКО с мастер-элементом из слоя
-    // извлечённого массива (копии идентичны мастеру и пересобираются по
-    // закону), а не со всем листом.
-    if (_arrayModeFor(project)) {
-      await _healMasterAndRebuild(project, project.pattern!.masterPaths);
-      return;
-    }
-    setState(() {
-      _busy = true;
-      _master = null; // после полного лечения мастер-элемент пересчитывается
-      _status = 'Лечение геометрии…';
-    });
-    _log('Лечение геометрии…');
-    try {
-      final healed = await _timed(_heavyHeal(project.rawPaths),
-          'Лечение геометрии');
-      final issues =
-          await _timed(_heavyAnalyze(healed), 'Анализ ошибок');
-      widget.onChange(Project(
-        name: project.name,
-        inputFile: project.inputFile,
-        params: project.params,
-        rawPaths: project.rawPaths,
-        healedPaths: healed,
-        issues: issues,
-        pattern: project.pattern,
-        arrayPaths: project.arrayPaths,
-        calc: project.calc,
-        variants: project.variants,
-        selectedVariantIndex: project.selectedVariantIndex,
-      ));
-      if (mounted) {
-        setState(() => _status = 'Вылечено: ${healed.length} контуров.');
-      }
-      _log('Вылечено: ${healed.length} контуров.');
-    } on TimeoutException catch (e) {
-      if (mounted) setState(() => _status = 'Ошибка: $e');
-      _log('Ошибка лечения (${project.inputFile}): $e',
-          level: LogLevel.error);
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  /// Массив извлечён: лечит мастер-элемент [base] и пересобирает слой ARRAY.
-  Future<void> _healMasterAndRebuild(
-      Project project, List<CamPath> base) async {
-    setState(() {
-      _busy = true;
-      _status = 'Лечение мастер-элемента (массив извлечён)…';
-    });
-    _log('Лечение мастер-элемента — рабочий вектор из извлечённого массива');
-    try {
-      final healed =
-          await _timed(_heavyHeal(base), 'Лечение мастер-элемента');
-      await _commitMaster(project, healed);
-    } on TimeoutException catch (e) {
-      if (mounted) setState(() => _status = 'Ошибка: $e');
-      _log('Ошибка лечения мастер-элемента (${project.inputFile}): $e',
-          level: LogLevel.error);
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
   /// Сохраняет новый мастер [healedAll] (слой MASTER), считает ошибки ТОЛЬКО
   /// по нему и пересобирает массив по тому же закону (слой ARRAY).
   Future<void> _commitMaster(Project project, List<CamPath> healedAll) async {
@@ -1059,9 +985,8 @@ class _GeometryScreenState extends State<GeometryScreen> {
           'Распознавание массива');
       if (!result.isArray || result.masterPaths.isEmpty) {
         if (mounted) {
-          setState(() => _status = 'Массив не найден. Совет: выполните '
-              '«Вылечить всё» и повторите, либо файл действительно содержит '
-              'одиночный контур.');
+          setState(() => _status = 'Массив не найден. Возможно, файл '
+              'действительно содержит одиночный контур.');
         }
         _log('Массив не найден в файле', level: LogLevel.warning);
         return;
