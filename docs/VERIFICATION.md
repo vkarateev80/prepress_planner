@@ -852,3 +852,28 @@ TTL 30 мин, отзыв всех сессий) — без изменений; 
   (кнопка «Забыли пароль?», форма без телефона, экран организации).
 - `monitor.py --dry-run` → все 9 проверок OK; лог auth — только 200/409
   от смоук-запросов, ошибок нет.
+
+### 24.2 Фикс вкладки «Аккаунты» в админке и его деплой (2026-09-30)
+
+**Баг:** `https://prepressplan.ru/admin/` → вкладка «Аккаунты» падала с
+`(u.created_at || "").slice is not a function` — у пользователей auth
+`created_at` приходит **epoch (REAL, секунды)**, а строка звала `.slice`
+у числа (участники не падали благодаря `String(...)`, но показывали
+первые 10 цифр эпохи).
+
+**Фикс** (`services/admin/admin_app/index.html`): хелпер `fmtDate(v)` —
+число трактуется как epoch-секунды, строка как ISO; результат —
+`YYYY-MM-DD` в локальной дате, `null`/пусто → пустая ячейка, нечисловая
+строка → обрезка без исключения. Применён в таблицах аккаунтов и
+участников; заказы (ISO `TEXT`) не тронуты.
+
+**Прогоны:** `pytest services/admin/tests` → **9 passed**; проверка
+`fmtDate` на epoch float/int, ISO, `null`, мусоре — без падений.
+
+**Деплой (коммит `8c187a8`):** `services/admin` синхронизирован на
+сервер → `docker build -t pp-admin` → `k3s ctr images import` →
+`rollout restart deploy/admin` — **Successful**, под Running.
+
+**Живая проверка:** `GET /admin/` → 200, в отданном `index.html`
+`fmtDate` (3 вхождения), ячейки используют `fmtDate(u.created_at)` и
+`fmtDate(m.created_at)`, старой строки `(u.created_at || '').slice` нет.
