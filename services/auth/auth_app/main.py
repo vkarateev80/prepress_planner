@@ -23,29 +23,32 @@ Legacy `services/license` (machine-id, офлайн-токены) в SaaS-пут
 возвращается в ответе (в т.ч. в dev-режиме без SMTP) и не раскрывается факт
 существования email. POST /auth/reset меняет пароль и отзывает все сессии.
 
-Регистрация двухфазная (подтверждение почты и телефона):
-  POST /auth/register {email, password, phone, org_name?, device_id?} → 202
-      создаёт пользователя БЕЗ сессии (email_verified_at/phone_verified_at
-      NULL) и шлёт два 6-значных кода: на email (SMTP) и на телефон (SMS).
-      Коды в БД только sha256, TTL = PP_RESET_TTL. Код в ответе появляется
-      только когда канал доставки недоступен: dev_email_code — без SMTP,
-      dev_phone_code — при PP_SMS_PROVIDER=dev (пока реального SMS нет).
-  POST /auth/confirm {email, email_code, phone_code, device_id?} → 201
-      сверяет оба кода, помечает аккаунт подтверждённым и выдаёт сессию
+Регистрация двухфазная (подтверждение почты):
+  POST /auth/register {name, email, password, org_name?, device_id?} → 202
+      создаёт пользователя БЕЗ сессии (email_verified_at NULL) и шлёт
+      6-значный код на email (SMTP). Код в БД только sha256,
+      TTL = PP_RESET_TTL. Код в ответе (dev_email_code) появляется только
+      когда SMTP не настроен.
+  POST /auth/confirm {email, email_code, device_id?} → 201
+      сверяет код, помечает аккаунт подтверждённым и выдаёт сессию
       (payload как у прежнего register: {token, user, orgs}).
-  POST /auth/confirm/resend {email, channel: email|phone} → {ok}
+  POST /auth/confirm/resend {email} → {ok}
       переотправка кода (кулдаун PP_RESEND_COOLDOWN, дефолт 60 с).
   POST /auth/login — 403, пока аккаунт не подтверждён.
+
+SMS-подтверждение удалено (см. HANDOFF §24): колонки users.phone /
+phone_verified_at сохранены для исторических данных, но в API и в отправке
+не участвуют.
 
 Зависимости: стандартная библиотека Python + fastapi/pydantic (+uvicorn для
 запуска). Почта — smtplib/email из stdlib. Внешних пакетов для логики нет.
 
 API:
-  POST /auth/register          {name, email, password, phone, org_name?}
+  POST /auth/register          {name, email, password, org_name?}
                                → 202 pending
-  POST /auth/confirm           {email, email_code, phone_code, device_id?}
+  POST /auth/confirm           {email, email_code, device_id?}
                                                               → 201 {token, user, orgs}
-  POST /auth/confirm/resend    {email, channel}               → {ok, dev_*_code?}
+  POST /auth/confirm/resend    {email}                     → {ok, dev_email_code?}
   POST /auth/login             {email, password, device_id?} → {token, user, orgs}
                                (вытесняет прежние сессии — 1/1)
   POST /auth/logout            (Bearer)                      → {ok, user_id}
@@ -72,17 +75,13 @@ env:
   PP_RESET_TTL     — срок кода сброса, мин (по умолчанию 30)
   PP_DEFAULT_ORG   — 1 (по умолчанию) = регистрация без org_name создаёт
                      личную организацию; 0 = пользователь без организации
-  PP_SMTP_HOST/PORT/USER/PASSWORD/FROM — почта для сброса (STARTTLS 587)
+  PP_SMTP_HOST/PORT/USER/PASSWORD/FROM — почта (подтверждение + сброс,
+                      STARTTLS 587)
   PP_SMTP_SSL      — 1 = сразу TLS (465)
-  PP_SMS_PROVIDER  — dev (по умолчанию): SMS не отправляется, код в ответе
-                     register/resend; sms_ru — реальная отправка sms.ru
-                     (нужен PP_SMS_API_ID; PP_SMS_TEST=1 — test=1 провайдера;
-                     PP_SMS_FROM — буквенный отправитель при коде 221)
   PP_RESEND_COOLDOWN — кулдаун переотправки кода подтверждения, с (60)
 """
 import hashlib
 import hmac
-import json
 import os
 import re
 import secrets
@@ -90,8 +89,6 @@ import smtplib
 import sqlite3
 import threading
 import time
-import urllib.parse
-import urllib.request
 from contextlib import asynccontextmanager
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -118,18 +115,6 @@ INVITE_TTL_S = 7 * 86400  # приглашения в организацию: 7 
 # Регистрация без org_name: 1 — создаём личную организацию (по умолчанию),
 # 0 — пользователь без организации (memberships добавляются позже).
 DEFAULT_ORG = os.environ.get("PP_DEFAULT_ORG", "1").strip() != "0"
-# SMS: dev (по умолчанию) — реальной отправки нет, код в ответе register/
-# resend; sms_ru — реальная отправка через https://sms.ru/sms/send
-# (нужен PP_SMS_API_ID; PP_SMS_TEST=1 — режим test=1 провайдера: ответ
-# проверяется, но SMS не отправляется и баланс не расходуется).
-SMS_PROVIDER = os.environ.get("PP_SMS_PROVIDER", "dev").strip() or "dev"
-SMS_API_ID = os.environ.get("PP_SMS_API_ID", "").strip()
-SMS_TEST = os.environ.get("PP_SMS_TEST", "").strip() == "1"
-# Буквенный отправитель sms.ru (раздел «Отправители»); пусто — отправитель
-# по умолчанию. Нужен, если в аккаунте включена обязательная буквенная
-# отправка (код 221).
-SMS_FROM = os.environ.get("PP_SMS_FROM", "").strip()
-SMS_URL = "https://sms.ru/sms/send"
 RESEND_COOLDOWN_S = float(
     os.environ.get("PP_RESEND_COOLDOWN", "60").strip() or 60)
 
@@ -144,17 +129,6 @@ _EMAIL_RE = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 def _check_email(email: str):
     if not re.match(_EMAIL_RE, email):
         raise HTTPException(status_code=422, detail="Некорректный email")
-
-
-def _check_phone(phone: str) -> str:
-    """Нормализация к +7XXXXXXXXXX; иначе 422. Принимает 8…, 7…, +7…."""
-    digits_only = re.sub(r"\D", "", phone)
-    if len(digits_only) == 11 and digits_only.startswith("8"):
-        digits_only = "7" + digits_only[1:]
-    if len(digits_only) != 11 or not digits_only.startswith("7"):
-        raise HTTPException(
-            status_code=422, detail="Некорректный номер телефона")
-    return "+" + digits_only
 
 
 def _connect() -> sqlite3.Connection:
@@ -539,8 +513,8 @@ def _use_reset_code(email: str, user_id: str, code: str) -> bool:
 
 
 def _new_verify_code(channel: str, dest: str, user_id: str) -> str:
-    """Код подтверждения (email|phone): в БД только sha256, свежий
-    вытесняет предыдущий (DELETE по channel+dest)."""
+    """Код подтверждения (в SaaS-пути только email): в БД только sha256,
+    свежий вытесняет предыдущий (DELETE по channel+dest)."""
     code = "".join(secrets.choice(digits) for _ in range(RESET_CODE_LEN))
     now = time.time()
     with _db_lock, _connect() as conn:
@@ -557,9 +531,8 @@ def _new_verify_code(channel: str, dest: str, user_id: str) -> str:
 
 def _check_verify_code(channel: str, dest: str, user_id: str,
                        code: str) -> bool:
-    """Сверка кода подтверждения без погашения (погашение — после того,
-    как проверились ОБА кода: иначе неверный код телефона «сжигал» бы
-    уже введённый код почты)."""
+    """Сверка кода подтверждения без погашения (погашение — отдельным
+    DELETE в confirm, чтобы неиспользованные коды не «сгорали» молча)."""
     now = time.time()
     with _db_lock, _connect() as conn:
         row = conn.execute(
@@ -585,53 +558,12 @@ def _verify_send_age(channel: str, dest: str) -> float:
     return time.time() - row["created_at"]
 
 
-def _send_sms(phone: str, code: str) -> bool:
-    """Отправка SMS-кода подтверждения. Возвращает True, если принято.
-
-    PP_SMS_PROVIDER=dev (по умолчанию) — реальной отправки нет: код
-    возвращается клиенту в dev_phone_code. PP_SMS_PROVIDER=sms_ru —
-    POST https://sms.ru/sms/send (документация sms.ru/api/send):
-    api_id + to (7XXXXXXXXXX) + msg (UTF-8) + json=1; ответ
-    {status, status_code, sms: {номер: {status, status_code, ...}}}.
-    """
-    if SMS_PROVIDER == "dev":
-        return False
-    if SMS_PROVIDER != "sms_ru":
-        raise RuntimeError(f"SMS-провайдер не поддержан: {SMS_PROVIDER}")
-    if not SMS_API_ID:
-        raise RuntimeError("PP_SMS_API_ID не задан")
-    to = phone.lstrip("+")
-    msg = (f"Препресс-Планер: код подтверждения {code}. "
-           f"Не сообщайте его никому.")
-    form = {"api_id": SMS_API_ID, "to": to, "msg": msg, "json": "1"}
-    if SMS_FROM:
-        form["from"] = SMS_FROM
-    if SMS_TEST:
-        form["test"] = "1"  # имитация: без отправки и без списания
-    req = urllib.request.Request(
-        SMS_URL,
-        data=urllib.parse.urlencode(form).encode("utf-8"),
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-        method="POST")
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        payload = json.loads(resp.read().decode("utf-8"))
-    if str(payload.get("status")) == "OK":
-        per = (payload.get("sms") or {}).get(to) or {}
-        if str(per.get("status")) == "OK":
-            return True
-        raise RuntimeError(
-            f"SMS.ru: {per.get('status_text') or per.get('status_code')}")
-    raise RuntimeError(
-        f"SMS.ru: {payload.get('status_text') or payload.get('status_code')}")
-
-
 # ---------- модели ----------
 
 class RegisterIn(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     email: str = Field(min_length=3, max_length=254)
     password: str = Field(min_length=6, max_length=128)
-    phone: str = Field(min_length=10, max_length=20)
     org_name: Optional[str] = Field(default=None, max_length=200)
     device_id: Optional[str] = Field(default=None, max_length=128)
 
@@ -639,13 +571,11 @@ class RegisterIn(BaseModel):
 class ConfirmIn(BaseModel):
     email: str = Field(min_length=3, max_length=254)
     email_code: str = Field(min_length=RESET_CODE_LEN, max_length=RESET_CODE_LEN)
-    phone_code: str = Field(min_length=RESET_CODE_LEN, max_length=RESET_CODE_LEN)
     device_id: Optional[str] = Field(default=None, max_length=128)
 
 
 class ConfirmResendIn(BaseModel):
     email: str = Field(min_length=3, max_length=254)
-    channel: str = Field(pattern="^(email|phone)$")
 
 
 class LoginIn(BaseModel):
@@ -721,13 +651,11 @@ def register(body: RegisterIn):
     """Фаза 1 регистрации: пользователь + организация БЕЗ сессии.
 
     Создаёт аккаунт (неподтверждённый), применяет приглашения и шлёт
-    два кода подтверждения: на email (SMTP) и на телефон (SMS, пока
-    PP_SMS_PROVIDER=dev — код в ответе). Сессия выдаётся только в
-    POST /auth/confirm.
+    код подтверждения на email (SMTP; без SMTP — dev_email_code в ответе).
+    Сессия выдаётся только в POST /auth/confirm.
     """
     email = body.email.lower().strip()
     _check_email(email)
-    phone = _check_phone(body.phone)
     name = body.name.strip()
     if not name:
         raise HTTPException(status_code=422, detail="Укажите имя пользователя")
@@ -739,8 +667,6 @@ def register(body: RegisterIn):
             raise HTTPException(status_code=409,
                                 detail="Email уже зарегистрирован")
         user_id = _create_user(conn, email, body.password, name)
-        conn.execute("UPDATE users SET phone = ? WHERE id = ?",
-                     (phone, user_id))
         # Автоприём живых приглашений по email — в той же транзакции.
         _apply_invites(conn, email, user_id)
         if org_name is None and DEFAULT_ORG:
@@ -750,8 +676,7 @@ def register(body: RegisterIn):
         # Сессию НЕ выдаём: до confirm аккаунтом пользоваться нельзя.
 
     email_code = _new_verify_code("email", email, user_id)
-    phone_code = _new_verify_code("phone", phone, user_id)
-    resp = {"pending": True, "email": email, "phone": phone}
+    resp = {"pending": True, "email": email}
 
     smtp = _smtp_config()
     if smtp is not None:
@@ -766,22 +691,12 @@ def register(body: RegisterIn):
             pass
     else:
         resp["dev_email_code"] = email_code  # dev: SMTP не настроен
-
-    try:
-        sms_sent = _send_sms(phone, phone_code)
-    except Exception:
-        sms_sent = False
-    resp["sms_sent"] = sms_sent
-    # Код в ответе — только в dev-режиме; у реального провайдера при сбое
-    # доставки код получить можно переотправкой (confirm/resend).
-    if SMS_PROVIDER == "dev" and not sms_sent:
-        resp["dev_phone_code"] = phone_code
     return resp
 
 
 @app.post("/auth/confirm", status_code=201)
 def confirm(body: ConfirmIn):
-    """Фаза 2: сверка обоих кодов → аккаунт подтверждён → сессия."""
+    """Фаза 2: сверка кода почты → аккаунт подтверждён → сессия."""
     email = body.email.lower().strip()
     _check_email(email)
     with _db_lock, _connect() as conn:
@@ -797,17 +712,13 @@ def confirm(body: ConfirmIn):
         if not _check_verify_code("email", email, row["id"], body.email_code):
             raise HTTPException(status_code=400,
                                 detail="Неверный или истёкший код почты")
-        if not _check_verify_code("phone", row["phone"], row["id"],
-                                  body.phone_code):
-            raise HTTPException(status_code=400,
-                                detail="Неверный или истёкший код телефона")
         now = time.time()
         conn.execute("DELETE FROM verify_codes WHERE user_id = ?",
                      (row["id"],))
         conn.execute(
-            "UPDATE users SET email_verified_at = ?, phone_verified_at = ?, "
-            "updated_at = ? WHERE id = ?",
-            (now, now, now, row["id"]))
+            "UPDATE users SET email_verified_at = ?, updated_at = ? "
+            "WHERE id = ?",
+            (now, now, row["id"]))
         # Политика 1/1: при выдаче первой сессии старые (не должно быть) —
         # на всякий случай отзываем.
         conn.execute("DELETE FROM sessions WHERE user_id = ?", (row["id"],))
@@ -820,50 +731,36 @@ def confirm(body: ConfirmIn):
 
 @app.post("/auth/confirm/resend")
 def confirm_resend(body: ConfirmResendIn):
-    """Переотправка кода подтверждения (кулдаун PP_RESEND_COOLDOWN).
+    """Переотправка кода подтверждения по почте (кулдаун PP_RESEND_COOLDOWN).
 
     Ответ одноразово-успешный ({ok: true}) — существование email не
-    раскрывается; dev_*_code появляется только когда отправили и канал
-    dev (без SMTP / PP_SMS_PROVIDER=dev).
+    раскрывается; dev_email_code появляется только когда отправили без SMTP.
     """
     email = body.email.lower().strip()
     _check_email(email)
     with _db_lock, _connect() as conn:
         row = conn.execute(
-            "SELECT id, phone FROM users WHERE email = ?",
-            (email,)).fetchone()
+            "SELECT id FROM users WHERE email = ?", (email,)).fetchone()
     if row is None:
         return {"ok": True}  # тихий no-op
-    dest = email if body.channel == "email" else (row["phone"] or "")
-    if not dest:
-        return {"ok": True}
-    if _verify_send_age(body.channel, dest) < RESEND_COOLDOWN_S:
+    if _verify_send_age("email", email) < RESEND_COOLDOWN_S:
         raise HTTPException(
             status_code=429,
             detail="Слишком часто. Повторите попытку позже.")
-    code = _new_verify_code(body.channel, dest, row["id"])
+    code = _new_verify_code("email", email, row["id"])
     resp = {"ok": True}
-    if body.channel == "email":
-        smtp = _smtp_config()
-        if smtp is not None:
-            try:
-                _send_email(
-                    email,
-                    "Подтверждение регистрации — Препресс-Планер",
-                    f"Код подтверждения почты: {code}\n"
-                    f"Код действителен {int(RESET_TTL_MIN)} минут.")
-            except Exception:
-                pass
-        else:
-            resp["dev_email_code"] = code
-    else:
+    smtp = _smtp_config()
+    if smtp is not None:
         try:
-            sms_sent = _send_sms(dest, code)
+            _send_email(
+                email,
+                "Подтверждение регистрации — Препресс-Планер",
+                f"Код подтверждения почты: {code}\n"
+                f"Код действителен {int(RESET_TTL_MIN)} минут.")
         except Exception:
-            sms_sent = False
-        resp["sms_sent"] = sms_sent
-        if SMS_PROVIDER == "dev" and not sms_sent:
-            resp["dev_phone_code"] = code
+            pass
+    else:
+        resp["dev_email_code"] = code
     return resp
 
 
@@ -885,7 +782,7 @@ def login(body: LoginIn):
         if row["email_verified_at"] is None:
             raise HTTPException(
                 status_code=403,
-                detail="Аккаунт не подтверждён. Введите коды с почты и из SMS.")
+                detail="Аккаунт не подтверждён. Введите код с почты.")
         # Политика 1/1: прежние сессии пользователя вытесняются.
         conn.execute("DELETE FROM sessions WHERE user_id = ?", (row["id"],))
         token = _issue_session(conn, row["id"], body.device_id)
@@ -1213,4 +1110,4 @@ def healthz():
             "device_policy": "single", "device_limit": 1,
             "multitenant": True, "roles": list(ROLES),
             "default_org": DEFAULT_ORG, "smtp": bool(smtp),
-            "sms": SMS_PROVIDER, "reset_ttl_min": RESET_TTL_MIN}
+            "verify": "email", "reset_ttl_min": RESET_TTL_MIN}

@@ -9,6 +9,7 @@ import 'package:prepress_planner/license/license_controller.dart';
 import 'package:prepress_planner/license/account_screen.dart';
 import 'package:prepress_planner/src/projects/project.dart';
 import 'package:prepress_planner/src/screens/home_shell.dart';
+import 'package:prepress_planner/src/screens/organization_screen.dart';
 
 import 'license_account_test.dart' as acc;
 
@@ -118,10 +119,9 @@ void main() {
     );
     await tester.runAsync(() async {
       await lic.init();
-      await lic.register('Владелец', 'paywall@example.com', 'secret1',
-          '+79991234001');
-      await lic.confirm(
-          acc.FakeGateway.devEmailCode, acc.FakeGateway.devPhoneCode);
+      await lic.register(
+          'Владелец', 'paywall@example.com', 'secret1');
+      await lic.confirm(acc.FakeGateway.devEmailCode);
     });
     expect(lic.loggedIn, true);
     await tester.pumpWidget(MaterialApp(
@@ -141,6 +141,44 @@ void main() {
     dir.deleteSync(recursive: true);
   });
 
+  testWidgets('экран организации: участники и управление', (tester) async {
+    final dir = Directory.systemTemp.createTempSync('pp_org_ui');
+    final fake = acc.FakeGateway();
+    final lic = LicenseController(
+      store: EntitlementStore('${dir.path}/st'),
+      client: LicenseClient(),
+      gateway: fake,
+      stateDir: '${dir.path}/st',
+    );
+    await tester.runAsync(() async {
+      await lic.init();
+      await lic.register('Владелец', 'owner@org.test', 'secret1');
+      await lic.confirm(acc.FakeGateway.devEmailCode);
+    });
+    fake.orgs.add({'org_id': 'org-1', 'name': 'Типография', 'role': 'owner'});
+    fake.membersByOrg['org-1'] = [
+      {'user_id': 'u1', 'email': 'owner@org.test', 'name': 'Владелец',
+       'role': 'owner', 'created_at': '2026-09-01'},
+      {'user_id': 'u2', 'email': 'member@org.test', 'name': '',
+       'role': 'member', 'created_at': '2026-09-02'},
+    ];
+
+    await tester.pumpWidget(MaterialApp(
+        home: OrganizationScreen(license: lic)));
+    await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 200)));
+    await tester.pump(const Duration(milliseconds: 200));
+
+    expect(find.text('Участники (2)'), findsOneWidget);
+    expect(find.text('owner@org.test'), findsOneWidget);
+    expect(find.text('member@org.test'), findsOneWidget);
+    expect(find.text('Владелец · роль: owner'), findsOneWidget);
+
+    // Управление доступно (роль owner): форма добавления присутствует.
+    expect(find.text('Добавить участника'), findsOneWidget);
+    dir.deleteSync(recursive: true);
+  });
+
   testWidgets('форма регистрации: имя, пароль и подтверждение пароля',
       (tester) async {
     final dir = Directory.systemTemp.createTempSync('pp_regform');
@@ -157,13 +195,13 @@ void main() {
     await tester.pump(const Duration(milliseconds: 200));
     expect(find.text('Имя пользователя'), findsOneWidget);
     expect(find.text('Повторите пароль'), findsOneWidget);
+    expect(find.text('Телефон'), findsNothing); // SMS-подтверждение удалено
 
     // Пустое имя → подсказка, наружу не уходим.
     await tester.enterText(find.byType(TextField).at(1), 'u@example.com');
-    await tester.enterText(find.byType(TextField).at(2), '+79991234567');
+    await tester.enterText(find.byType(TextField).at(2), 'secret1');
     await tester.enterText(find.byType(TextField).at(3), 'secret1');
-    await tester.enterText(find.byType(TextField).at(4), 'secret1');
-    // Шесть полей не помещаются: прокручиваем список к кнопке.
+    // Поля не помещаются: прокручиваем список к кнопке.
     await tester.drag(find.byType(ListView).first, const Offset(0, -400));
     await tester.pump(const Duration(milliseconds: 200));
     await tester.tap(find.text('Создать аккаунт'));
@@ -172,16 +210,59 @@ void main() {
 
     // Пароли не совпадают.
     await tester.enterText(find.byType(TextField).at(0), 'Иван');
-    await tester.enterText(find.byType(TextField).at(4), 'other');
+    await tester.enterText(find.byType(TextField).at(3), 'other');
     await tester.tap(find.text('Создать аккаунт'));
     await tester.pump(const Duration(milliseconds: 200));
     expect(find.text('Пароли не совпадают'), findsOneWidget);
 
     // Всё верно → уходим в controller (offline-фолбэк: сервера нет).
-    await tester.enterText(find.byType(TextField).at(4), 'secret1');
+    await tester.enterText(find.byType(TextField).at(3), 'secret1');
     await tester.tap(find.text('Создать аккаунт'));
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.textContaining('Регистрация недоступна'), findsOneWidget);
+    dir.deleteSync(recursive: true);
+  });
+
+  testWidgets('восстановление пароля: «Забыли пароль?» → код → новый пароль',
+      (tester) async {
+    final dir = Directory.systemTemp.createTempSync('pp_forgot');
+    final fake = acc.FakeGateway();
+    final lic = LicenseController(
+      store: EntitlementStore('${dir.path}/st'),
+      client: LicenseClient(),
+      gateway: fake,
+      stateDir: '${dir.path}/st',
+    );
+    await tester.runAsync(() async {
+      await lic.init();
+      // Подтверждать не нужно: форма входа видна, пока сессии нет.
+      await lic.register('Тест Юзер', 'forgot@example.com', 'secret1');
+    });
+    expect(lic.loggedIn, false);
+
+    await tester.pumpWidget(MaterialApp(home: AccountScreen(license: lic)));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('Забыли пароль?'), findsOneWidget);
+
+    // Сброс стартует по email — заполняем поле и жмём кнопку.
+    await tester.enterText(find.byType(TextField).first, 'forgot@example.com');
+    await tester.tap(find.text('Забыли пароль?'));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('Сброс пароля'), findsOneWidget);
+    expect(find.text('Код из письма'), findsOneWidget);
+    expect(find.text('Новый пароль'), findsOneWidget);
+
+    // Код из dev-ответа + новый пароль → сброс.
+    await tester.enterText(find.byType(TextField).at(1), '123456');
+    await tester.enterText(find.byType(TextField).at(2), 'new-pass1');
+    await tester.drag(find.byType(ListView).first, const Offset(0, -400));
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.tap(find.text('Сбросить пароль'));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.textContaining('Пароль сброшен'), findsOneWidget);
+
+    // Новый пароль реально сменился в шлюзе, старый не подходит.
+    expect(fake.users['forgot@example.com'], 'new-pass1');
     dir.deleteSync(recursive: true);
   });
 
@@ -197,9 +278,8 @@ void main() {
     );
     await tester.runAsync(() async {
       await lic.init();
-      await lic.register('Тест Юзер', 'tab401@example.com', 'secret1', '+79991234567');
-      await lic.confirm(
-          acc.FakeGateway.devEmailCode, acc.FakeGateway.devPhoneCode);
+      await lic.register('Тест Юзер', 'tab401@example.com', 'secret1');
+      await lic.confirm(acc.FakeGateway.devEmailCode);
     });
     expect(lic.loggedIn, true);
 

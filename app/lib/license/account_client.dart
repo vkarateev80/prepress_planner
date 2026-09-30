@@ -42,19 +42,16 @@ class AccountSession {
 
 /// Ответ фазы 1 регистрации / переотправки кода подтверждения.
 ///
-/// `error == null` — сервер принял запрос (202/200); dev-коды
-/// (`dev_email_code`/`dev_phone_code`) приходят только когда канал
-/// доставки dev-режимный (без SMTP / PP_SMS_PROVIDER=dev).
+/// `error == null` — сервер принял запрос (202/200); dev-код
+/// (`dev_email_code`) приходит только когда SMTP не настроен.
 class RegisterPending {
   final String? error;
   final int statusCode;
   final String? devEmailCode;
-  final String? devPhoneCode;
   const RegisterPending({
     this.error,
     this.statusCode = 0,
     this.devEmailCode,
-    this.devPhoneCode,
   });
 
   bool get ok => error == null;
@@ -134,17 +131,16 @@ class SessionStore {
 /// Шлюз аккаунта: auth + payments. В тестах подменяется фейком.
 abstract class AccountGateway {
   /// Регистрация, фаза 1: создаёт неподтверждённый аккаунт (имя, почта,
-  /// пароль, телефон) и запускает отправку кодов (email + SMS).
-  /// Сессию НЕ выдаёт.
-  Future<RegisterPending> register(String name, String email,
-      String password, String phone, String deviceId);
+  /// пароль) и запускает отправку кода на email. Сессию НЕ выдаёт.
+  Future<RegisterPending> register(
+      String name, String email, String password, String deviceId);
 
-  /// Подтверждение, фаза 2: оба кода верны → сессия.
+  /// Подтверждение, фаза 2: код почты верен → сессия.
   Future<AccountSession> confirm(
-      String email, String emailCode, String phoneCode, String deviceId);
+      String email, String emailCode, String deviceId);
 
-  /// Переотправка кода подтверждения: channel = email | phone.
-  Future<RegisterPending> confirmResend(String email, String channel);
+  /// Переотправка кода подтверждения на email.
+  Future<RegisterPending> confirmResend(String email);
 
   /// Проверка живости сессии (`GET /auth/me`): 401 → ApiException(401).
   Future<void> me(String token);
@@ -172,6 +168,19 @@ abstract class AccountGateway {
 
   /// Создать заказ (заглушка) и оплатить его тестовым подтверждением.
   Future<Map<String, dynamic>> purchase(String token, String plan);
+
+  /// Мои организации: [{org_id, name, role, ...}].
+  Future<List<Map<String, dynamic>>> myOrgs(String token);
+
+  /// Участники организации (член org).
+  Future<List<Map<String, dynamic>>> listMembers(String token, String orgId);
+
+  /// Добавить участника/пригласить: → {status: added|invited, ...}.
+  Future<Map<String, dynamic>> addMember(
+      String token, String orgId, String email, String role);
+
+  /// Убрать участника из организации.
+  Future<void> removeMember(String token, String orgId, String userId);
 }
 
 /// HTTP-реализация шлюза поверх микросервисов auth/payments.
@@ -184,17 +193,17 @@ class AccountGatewayHttp implements AccountGateway {
 
   @override
   Future<RegisterPending> register(String name, String email,
-          String password, String phone, String deviceId) =>
-      auth.register(name, email, password, phone, deviceId);
+          String password, String deviceId) =>
+      auth.register(name, email, password, deviceId);
 
   @override
-  Future<AccountSession> confirm(String email, String emailCode,
-          String phoneCode, String deviceId) =>
-      auth.confirm(email, emailCode, phoneCode, deviceId);
+  Future<AccountSession> confirm(
+          String email, String emailCode, String deviceId) =>
+      auth.confirm(email, emailCode, deviceId);
 
   @override
-  Future<RegisterPending> confirmResend(String email, String channel) =>
-      auth.confirmResend(email, channel);
+  Future<RegisterPending> confirmResend(String email) =>
+      auth.confirmResend(email);
 
   @override
   Future<void> me(String token) => auth.me(token);
@@ -226,6 +235,23 @@ class AccountGatewayHttp implements AccountGateway {
   @override
   Future<List<Map<String, dynamic>>> plans(String token) =>
       payments.plans(token);
+
+  @override
+  Future<List<Map<String, dynamic>>> myOrgs(String token) =>
+      auth.myOrgs(token);
+
+  @override
+  Future<List<Map<String, dynamic>>> listMembers(String token, String orgId) =>
+      auth.listMembers(token, orgId);
+
+  @override
+  Future<Map<String, dynamic>> addMember(
+          String token, String orgId, String email, String role) =>
+      auth.addMember(token, orgId, email, role);
+
+  @override
+  Future<void> removeMember(String token, String orgId, String userId) =>
+      auth.removeMember(token, orgId, userId);
 
   @override
   Future<Map<String, dynamic>> purchase(String token, String plan) async {
@@ -260,13 +286,12 @@ class AuthApi {
       baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
 
   Future<RegisterPending> register(String name, String email,
-      String password, String phone, String deviceId) async {
+      String password, String deviceId) async {
     try {
       final resp = await httpJsonPost('$_base/auth/register', json: {
         'name': name,
         'email': email,
         'password': password,
-        'phone': phone,
         'device_id': deviceId,
       }, timeout: _timeout);
       // Фаза 1 — 202 Accepted (прежний 201 без сессии больше не выдаётся).
@@ -274,7 +299,6 @@ class AuthApi {
         final j = jsonDecode(resp.text) as Map<String, dynamic>;
         return RegisterPending(
           devEmailCode: j['dev_email_code'] as String?,
-          devPhoneCode: j['dev_phone_code'] as String?,
         );
       }
       throw ApiException(_detail(resp.text), statusCode: resp.status);
@@ -288,24 +312,22 @@ class AuthApi {
   }
 
   Future<AccountSession> confirm(String email, String emailCode,
-      String phoneCode, String deviceId) {
+      String deviceId) {
     return _post('/auth/confirm', {
       'email': email,
       'email_code': emailCode,
-      'phone_code': phoneCode,
       'device_id': deviceId,
     });
   }
 
-  Future<RegisterPending> confirmResend(String email, String channel) async {
+  Future<RegisterPending> confirmResend(String email) async {
     try {
       final resp = await httpJsonPost('$_base/auth/confirm/resend',
-          json: {'email': email, 'channel': channel}, timeout: _timeout);
+          json: {'email': email}, timeout: _timeout);
       if (resp.status >= 200 && resp.status < 300) {
         final j = jsonDecode(resp.text) as Map<String, dynamic>;
         return RegisterPending(
           devEmailCode: j['dev_email_code'] as String?,
-          devPhoneCode: j['dev_phone_code'] as String?,
         );
       }
       throw ApiException(_detail(resp.text), statusCode: resp.status);
@@ -425,6 +447,47 @@ class AuthApi {
     } on NetworkException {
       throw _unavailable;
     }
+  }
+
+  Future<List<Map<String, dynamic>>> myOrgs(String token) async {
+    final resp = await httpJsonGet('$_base/auth/orgs',
+        headers: {'Authorization': 'Bearer $token'}, timeout: _timeout);
+    if (resp.status == 200) {
+      final j = jsonDecode(resp.text) as Map<String, dynamic>;
+      return (j['orgs'] as List? ?? []).cast<Map<String, dynamic>>();
+    }
+    throw ApiException(_detail(resp.text), statusCode: resp.status);
+  }
+
+  Future<List<Map<String, dynamic>>> listMembers(
+      String token, String orgId) async {
+    final resp = await httpJsonGet('$_base/auth/orgs/$orgId/members',
+        headers: {'Authorization': 'Bearer $token'}, timeout: _timeout);
+    if (resp.status == 200) {
+      final j = jsonDecode(resp.text) as Map<String, dynamic>;
+      return (j['members'] as List? ?? []).cast<Map<String, dynamic>>();
+    }
+    throw ApiException(_detail(resp.text), statusCode: resp.status);
+  }
+
+  Future<Map<String, dynamic>> addMember(
+      String token, String orgId, String email, String role) async {
+    final resp = await httpJsonPost('$_base/auth/orgs/$orgId/members',
+        headers: {'Authorization': 'Bearer $token'},
+        json: {'email': email, 'role': role},
+        timeout: _timeout);
+    if (resp.status == 200 || resp.status == 201) {
+      return jsonDecode(resp.text) as Map<String, dynamic>;
+    }
+    throw ApiException(_detail(resp.text), statusCode: resp.status);
+  }
+
+  Future<void> removeMember(
+      String token, String orgId, String userId) async {
+    final resp = await httpJsonDelete('$_base/auth/orgs/$orgId/members/$userId',
+        headers: {'Authorization': 'Bearer $token'}, timeout: _timeout);
+    if (resp.status == 200) return;
+    throw ApiException(_detail(resp.text), statusCode: resp.status);
   }
 
   static String _detail(String text) {

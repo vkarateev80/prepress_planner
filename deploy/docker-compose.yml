@@ -204,8 +204,6 @@ services:
       PP_SMTP_USER: ${PP_SMTP_USER:-}
       PP_SMTP_PASSWORD: ${PP_SMTP_PASSWORD:-}
       PP_SMTP_FROM: ${PP_SMTP_FROM:-}
-      # SMS-подтверждение регистрации: dev — код в ответе (см. services/auth/README).
-      PP_SMS_PROVIDER: ${PP_SMS_PROVIDER:-dev}
       DB_URL: postgresql://pp_user:${PP_DB_PASSWORD:-pp_secret}@postgresql:5432/prepress_saas
     volumes:
       - auth-data:/srv/auth/data

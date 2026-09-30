@@ -101,3 +101,17 @@ Cron на сервере уже установлен: **ежедневно в 04
 `mail.hosting.reg.ru:587` (STARTTLS), отправитель `info@prepressplan.ru`
 (ящик создан в панели server125). Проверка: `GET /healthz` auth → `"smtp": true`.
 Смена пароля ящика → обновить ConfigMap и `rollout restart deploy/auth`.
+
+## Мониторинг healthz (k3s)
+
+```bash
+python3 k8s/monitor.py --dry-run   # проверка без письма
+```
+
+Cron на сервере (установлен): **каждые 5 минут** — `monitor.py` в лог
+`/var/log/pp-monitor.log`. Проверяет edge (публичный `/healthz`),
+api/auth/billing/converter/domain-worker/admin (ClusterIP — скрипт на
+хосте, кластерного DNS нет), minio и `pg_isready`. Письмо на
+`PP_SMTP_FROM` (info@prepressplan.ru) уходит **только при изменении
+набора недоступных** (down/up-переходы); SMTP-креды читаются из ConfigMap
+`pp-config` — в коде их нет. State: `/var/lib/pp-health/state.json`.

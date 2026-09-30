@@ -4,10 +4,11 @@
 2. Сертификаты TLS: **прод** — `PP_DOMAIN=example.com PP_ACME_EMAIL=admin@example.com bash deploy/nginx/get_prod_certs.sh` (Let's Encrypt, webroot; обновление — `… get_prod_certs.sh renew`, cron `0 3 * * 1`); для стенда — `bash deploy/nginx/gen_dev_certs.sh`. Файлы — `deploy/nginx/certs/fullchain.pem` + `privkey.pem`.
 3. `docker compose up -d --build` из `deploy/`.
 4. Проверить `/healthz`: `curl -sf https://<domain>/healthz`.
-5. Проверить auth: `POST /auth/register` `{name,email,password,phone}` → **202
-   pending** (dev-коды в ответе, если SMTP/SMS dev-режимные), затем
-   `POST /auth/confirm` `{email,email_code,phone_code}` → **201** с
-   `token` + `orgs`; `login` до confirm → 403.
+5. Проверить auth: `POST /auth/register` `{name,email,password}` → **202
+   pending** (dev-код в ответе, если SMTP не настроен), затем
+   `POST /auth/confirm` `{email,email_code}` → **201** с
+   `token` + `orgs`; `login` до confirm → 403; `POST /auth/forgot` →
+   `{ok:true}` (код уходит на почту).
 6. Проверить billing webhook: раздел кабинета ЮKassa **Интеграция →
    HTTP-уведомления** → URL `https://<domain>/payments/webhook` + события
    (`payment.succeeded`, `payment.canceled`, `payment.waiting_for_capture`,
@@ -37,12 +38,7 @@
    проверить сброс пароля и (с F-19) письмо-приглашение.
 4. **Offsite-хранилище**: завести bucket + ключи у S3-провайдера →
    `PP_OFFSITE_*` (п.9), крон.
-5. **SMS-провайдер** (подтверждение телефона при регистрации): получить
-   ключ у провайдера → реализовать `_send_sms` в `services/auth` и
-   задать `PP_SMS_PROVIDER` (+ключи). **До этого на проде `dev`**: SMS
-   реально не отправляется, код виден клиенту в ответе — для публичного
-   запуска обязательна замена.
-6. **iOS IAP (StoreKit) — заблокировано без аккаунта Apple** (HANDOFF §9 п.7).
+5. **iOS IAP (StoreKit) — заблокировано без аккаунта Apple** (HANDOFF §9 п.7).
    Что нужно: macOS + Xcode, Apple Developer Program (годовая подписка),
    приложение/App в App Store Connect с product_id подписки (например,
    `pro_month`), sandbox-тестер. Что уже готово в коде: paywall и

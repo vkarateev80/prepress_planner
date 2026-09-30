@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import 'account_client.dart';
 import 'license_controller.dart';
+import '../src/screens/organization_screen.dart';
 
 /// Открывает экран аккаунта (вход/регистрация или профиль).
 Future<void> openAccountScreen(
@@ -27,14 +28,12 @@ class _AccountScreenState extends State<AccountScreen> {
   final _emailCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
   final _pass2Ctrl = TextEditingController();
-  final _phoneCtrl = TextEditingController();
   final _codeCtrl = TextEditingController();
   final _emailCodeCtrl = TextEditingController();
-  final _smsCodeCtrl = TextEditingController();
   final _newPassCtrl = TextEditingController();
   bool _registerMode = false;
   bool _resetMode = false; // шаг «забыли пароль» (email → код → пароль)
-  bool _confirmMode = false; // шаг подтверждения (два кода: почта + SMS)
+  bool _confirmMode = false; // шаг подтверждения (код с почты)
   String _message = '';
 
   @override
@@ -50,10 +49,8 @@ class _AccountScreenState extends State<AccountScreen> {
     _emailCtrl.dispose();
     _passCtrl.dispose();
     _pass2Ctrl.dispose();
-    _phoneCtrl.dispose();
     _codeCtrl.dispose();
     _emailCodeCtrl.dispose();
-    _smsCodeCtrl.dispose();
     _newPassCtrl.dispose();
     super.dispose();
   }
@@ -70,20 +67,15 @@ class _AccountScreenState extends State<AccountScreen> {
     setState(() => _message = '');
     if (_registerMode) {
       final name = _nameCtrl.text.trim();
-      final phone = _phoneCtrl.text.trim();
       if (name.isEmpty) {
         setState(() => _message = 'Введите имя пользователя');
-        return;
-      }
-      if (phone.isEmpty) {
-        setState(() => _message = 'Введите номер телефона');
         return;
       }
       if (password != _pass2Ctrl.text) {
         setState(() => _message = 'Пароли не совпадают');
         return;
       }
-      final res = await license.register(name, email, password, phone);
+      final res = await license.register(name, email, password);
       if (!mounted) return;
       if (res.error != null) {
         setState(() => _message = res.error!);
@@ -91,7 +83,7 @@ class _AccountScreenState extends State<AccountScreen> {
       }
       setState(() {
         _confirmMode = true;
-        _message = _codesMessage(res.devEmailCode, res.devPhoneCode);
+        _message = _codeMessage(res.devEmailCode);
       });
       return;
     }
@@ -114,30 +106,21 @@ class _AccountScreenState extends State<AccountScreen> {
     }
   }
 
-  static String _codesMessage(String? devEmail, String? devSms) {
-    final parts = <String>[
-      if (devEmail == null && devSms == null)
-        'Коды отправлены на email и телефон. Введите их ниже.'
-      else ...[
-        if (devEmail != null) 'Код с почты (dev-режим): $devEmail.',
-        if (devSms != null) 'SMS-код (dev-режим): $devSms.',
-        if (devEmail == null) 'Код с почты отправлен на email.',
-        if (devSms == null) 'SMS-код отправлен на телефон.',
-      ],
-    ];
-    return parts.join(' ');
+  static String _codeMessage(String? devEmail) {
+    return devEmail != null
+        ? 'Код с почты (dev-режим): $devEmail.'
+        : 'Код отправлен на email. Введите его ниже.';
   }
 
-  /// Шаг подтверждения: оба кода → сессия.
+  /// Шаг подтверждения: код почты → сессия.
   Future<void> _doConfirm() async {
     final ec = _emailCodeCtrl.text.trim();
-    final sc = _smsCodeCtrl.text.trim();
-    if (ec.isEmpty || sc.isEmpty) {
-      setState(() => _message = 'Введите оба кода');
+    if (ec.isEmpty) {
+      setState(() => _message = 'Введите код с почты');
       return;
     }
     setState(() => _message = '');
-    final err = await license.confirm(ec, sc);
+    final err = await license.confirm(ec);
     if (!mounted) return;
     if (err != null) {
       setState(() => _message = err);
@@ -152,13 +135,12 @@ class _AccountScreenState extends State<AccountScreen> {
     if (mounted) Navigator.of(context).pop();
   }
 
-  Future<void> _resend(String channel) async {
+  Future<void> _resend() async {
     setState(() => _message = 'Отправляем…');
-    final res = await license.resendConfirm(channel);
+    final res = await license.resendConfirm();
     if (!mounted) return;
     setState(() {
-      _message = res.error ??
-          _codesMessage(res.devEmailCode, res.devPhoneCode);
+      _message = res.error ?? _codeMessage(res.devEmailCode);
     });
   }
 
@@ -275,6 +257,11 @@ class _AccountScreenState extends State<AccountScreen> {
           const SizedBox(height: 8),
         ],
         FilledButton.tonal(
+          onPressed: () => openOrganizationScreen(context, lic),
+          child: const Text('Организация и участники'),
+        ),
+        const SizedBox(height: 8),
+        FilledButton.tonal(
           onPressed: lic.busy ? null : _logout,
           child: const Text('Выйти'),
         ),
@@ -326,16 +313,7 @@ class _AccountScreenState extends State<AccountScreen> {
             keyboardType: TextInputType.number,
             decoration: const InputDecoration(
                 labelText: 'Код с почты',
-                border: OutlineInputBorder(),
-                isDense: true),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _smsCodeCtrl,
-            keyboardType: TextInputType.number,
-            decoration: const InputDecoration(
-                labelText: 'SMS-код',
-                helperText: 'Код подтверждения из сообщения',
+                helperText: 'Из письма о регистрации',
                 border: OutlineInputBorder(),
                 isDense: true),
             onSubmitted: (_) => _doConfirm(),
@@ -361,18 +339,6 @@ class _AccountScreenState extends State<AccountScreen> {
             onSubmitted: (_) => _doReset(),
           ),
         ] else ...[
-          if (_registerMode) ...[
-            TextField(
-              controller: _phoneCtrl,
-              keyboardType: TextInputType.phone,
-              decoration: const InputDecoration(
-                  labelText: 'Телефон',
-                  helperText: 'Например, +7 999 123-45-67',
-                  border: OutlineInputBorder(),
-                  isDense: true),
-            ),
-            const SizedBox(height: 12),
-          ],
           TextField(
             controller: _passCtrl,
             obscureText: true,
@@ -418,12 +384,8 @@ class _AccountScreenState extends State<AccountScreen> {
           ),
         if (_confirmMode) ...[
           TextButton(
-            onPressed: lic.busy ? null : () => _resend('email'),
+            onPressed: lic.busy ? null : _resend,
             child: const Text('Код на почту повторно'),
-          ),
-          TextButton(
-            onPressed: lic.busy ? null : () => _resend('phone'),
-            child: const Text('SMS-код повторно'),
           ),
           TextButton(
             onPressed: () {
@@ -432,7 +394,6 @@ class _AccountScreenState extends State<AccountScreen> {
                 _confirmMode = false;
                 _registerMode = false;
                 _emailCodeCtrl.clear();
-                _smsCodeCtrl.clear();
                 _message = '';
               });
             },

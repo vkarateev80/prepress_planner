@@ -604,11 +604,12 @@ SMTP `mail.hosting.reg.ru:587` (auth healthz smtp:true). Бэкапы: cron 04:0
 5. Offsite-бэкапы: нужен внешний S3 (`PP_OFFSITE_*` готовы).
 6. ~~Drill-восстановления из бэкапа~~ — **ЗАКРЫТО** 2026-09-28 (§18):
    restore прогнан в scratch-ресурсах, пробел с `auth.db` найден и исправлен.
-7. Мониторинг/алерты healthz (на сервере уже есть prometheus, ns
-   `monitoring`; при дрилле поймано: `/healthz` >1 с под нагрузкой при
-   дефолтном `timeoutSeconds: 1` проб → флокают readiness/liveness —
-   см. VERIFICATION §11.5); UI участников (F-19 API есть, экрана нет);
-   iOS IAP (ждёт Apple-аккаунт).
+7. ~~Мониторинг/алерты healthz~~ — **СДЕЛАНО** (§22: monitor.py + cron
+   */5, письма при переходах). ~~UI участников~~ — **СДЕЛАНО** (§23:
+   экран «Организация и участники», тесты 61/61) — **выкат web ЖДЁТ
+   санкции** (см. §23). iOS IAP — ждёт Apple-аккаунт.
+   Замечание по healthz-пробам: `/healthz` >1 с под нагрузкой при
+   дефолтном `timeoutSeconds: 1` → флокают readiness/liveness (§11.5).
 8. SMS-провайдер подтверждения телефона (§19): сейчас `PP_SMS_PROVIDER=dev`
    (код в ответе) — до публичного запуска подключить (DEPLOY_CHECKLIST
    «Внешние действия» п.5); деплой auth-образа и манифестов на прод.
@@ -765,3 +766,83 @@ pytest **180 passed** (VERIFICATION §21).
 `k8s-accept-1790523361@example.com`); после деплоя в system org добавить
 `info@prepressplan.ru` (admin), иначе владелец не войдёт. URL:
 `https://prepressplan.ru/admin/`.
+
+**Мониторинг (2026-09-30, VERIFICATION §22):** `deploy/k8s/monitor.py` +
+cron `*/5` на сервере — healthz всех сервисов, алерт-письма на
+info@prepressplan.ru только при переходах, креды из ConfigMap, лог
+`/var/log/pp-monitor.log`, state `/var/lib/pp-health/state.json`.
+
+**UI участников (2026-09-30, VERIFICATION §23):** экран «Организация и
+участники» (вход из профиля): выбор org, список, добавление с ролями
+(member/viewer/admin, при SMTP-приглашением), удаление; управление —
+owner/admin организации. Клиент+контроллер+тесты 61/61. Деплой web —
+по санкции владельца (вместе с коммитом мониторинга).
+
+---
+
+## 23. Переход в новую сессию (2026-09-30)
+
+Сеанс 2026-09-28…30 закрыт: 20/20 задач (дрілл бэкапов, двухфазная
+регистрация, 1/1-вытеснение, ЮKassa-ключи+вебхук, админка `/admin`,
+мониторинг healthz, UI участников — VERIFICATION §11–§23).
+
+**Git:** ветка `main`, последний запушенный коммит `d9bd548`;
+origin синхронен. **В рабочем дереве 10 файлов НЕ закоммичены и НЕ
+выкачены** (владелец ещё не санкционировал):
+- `deploy/k8s/monitor.py` + README/VERIFICATION/HANDOFF (§22–§23) —
+  сам мониторинг на сервере уже установлен вручную (cron */5, скрипт
+  `/opt/pp/stack/deploy/k8s/monitor.py`);
+- UI участников (`account_client`, `license_controller`,
+  `account_screen`, `organization_screen.dart`, тесты) — **деплой
+  `pp-web` не выполнялся**, прод показывает прошлую сборку.
+Первый шаг новой сессии: спросить владельца про «коммит → пуш → деплой
+`pp-web`».
+
+**Внешние ожидания владельца** (все — в DEPLOY_CHECKLIST):
+1. Буквенный отправитель sms.ru (`?panel=senders`, код 221) → повторить
+   смоук (сейчас `PP_SMS_TEST=1`) → выставить `PP_SMS_TEST=0` → живой SMS
+   (`PP_SMS_FROM` уже в коде; api_id в `pp-secrets`).
+2. Тестовая оплата 5000 ₽ через paywall (кнопка работает; вебхук
+   подтверждает — механизм проверен).
+3. save_payment_method у мерчанта → включить `YUKASSA_SAVE_PAYMENT_METHOD=1`.
+4. Госуслуги (.ru), юр.просмотр оферты, offsite-S3, Apple-аккаунт (iOS IAP).
+
+**Эксплуатация (актуально):** прод `prepressplan.ru` (k3s, 185.227.144.229);
+админка `https://prepressplan.ru/admin/` (owner: vladimirkarateev@mail.ru;
+системная организация — первая org, члены: владелец owner, k8s-accept
+member); мониторинг — cron */5, лог `/var/log/pp-monitor.log`, письма на
+info@prepressplan.ru; бэкапы cron 04:00; деплой-паттерн: сборка образов на
+сервере в `/opt/pp/stack` → `k3s ctr images import` → `kubectl rollout`.
+Команды проверки — §3; грабли — §7; UI-ограничения Browser Use — в конце §17.
+
+## 24. Сеанс 2026-09-30: SMS удалён, восстановление пароля (2026-09-30)
+
+Решение владельца на входе в сессию: **подтверждение регистрации только
+по почте** (SMS убрать совсем) и **кнопка восстановления пароля** (она уже
+была в коде — оставлена, закрыта виджет-тестом). Детали и прогоны —
+`docs/VERIFICATION.md` §24.
+
+**Изменено:**
+- auth: `register {name,email,password}` → 202 + код на email;
+  `confirm {email,email_code}` → 201; `confirm/resend {email}`; удалены
+  `_send_sms`/`_check_phone`/`PP_SMS_*`, `/healthz` отдаёт `verify:"email"`.
+  Колонки `users.phone`/`phone_verified_at` сохранены (история + админка).
+- клиент Flutter: без поля телефона и SMS-кода; «Код на почту повторно»;
+  `LicenseController.register/confirm/resendConfirm` — без телефонных
+  аргументов.
+- деплой/доки: `PP_SMS_*` вычищены из `.env.example`, compose,
+  `01-config.yaml`, `20-auth.yaml`, DEPLOY_CHECKLIST; README auth обновлён.
+
+**Внешние ожидания владельца из §23 — пункт 1 (буквенный отправитель
+sms.ru, `PP_SMS_TEST=0`) снят как невостребованный.** Остальные:
+тестовая оплата 5000 ₽, `YUKASSA_SAVE_PAYMENT_METHOD=1`, госуслуги/.ru,
+юр.просмотр оферты, offsite-S3, Apple-аккаунт (iOS IAP).
+
+**Git:** в рабочем дереве теперь 10 файлов предыдущего сеанса + правки
+этого (auth, клиент, конфиги, доки) — **коммит/пуш не выполнялся**
+(спрашивать владельца). Деплой `pp-web` и `auth` на проде не выполнялся:
+прод работает со старым контрактом (с SMS), после пуша нужен деплой
+образов auth + web по паттерну §16 (`/opt/pp/stack` → import → rollout).
+
+**Прогоны:** pytest сервисов 168 passed / 1 skipped; flutter analyze чисто;
+flutter test 62/62.

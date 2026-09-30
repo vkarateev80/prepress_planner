@@ -187,17 +187,16 @@ class LicenseController extends ChangeNotifier {
     }
   }
 
-  /// Регистрация, фаза 1: аккаунт создан (имя, почта, пароль, телефон),
-  /// коды отправлены; сессии нет. Успех → [needsConfirm] = true,
-  /// в ответе dev-коды недоступных каналов.
-  Future<({String? error, String? devEmailCode, String? devPhoneCode})>
-      register(String name, String email, String password, String phone) async {
+  /// Регистрация, фаза 1: аккаунт создан (имя, почта, пароль), код
+  /// отправлен на email; сессии нет. Успех → [needsConfirm] = true,
+  /// в ответе dev-код, если SMTP не настроен.
+  Future<({String? error, String? devEmailCode})> register(
+      String name, String email, String password) async {
     final g = gateway;
     if (g == null) {
       return (
         error: 'Регистрация недоступна: сервер не настроен',
         devEmailCode: null,
-        devPhoneCode: null,
       );
     }
     _busy = true;
@@ -205,28 +204,24 @@ class LicenseController extends ChangeNotifier {
     notifyListeners();
     try {
       final deviceId = await _deviceIdOrError();
-      final res = await g.register(
-          name.trim(), email.trim(), password, phone.trim(), deviceId);
+      final res =
+          await g.register(name.trim(), email.trim(), password, deviceId);
       _pendingEmail = res.ok ? email.trim() : null;
-      return (
-        error: res.error,
-        devEmailCode: res.devEmailCode,
-        devPhoneCode: res.devPhoneCode,
-      );
+      return (error: res.error, devEmailCode: res.devEmailCode);
     } on ApiException catch (e) {
       _accountError = e.toString();
-      return (error: e.toString(), devEmailCode: null, devPhoneCode: null);
+      return (error: e.toString(), devEmailCode: null);
     } on Exception catch (e) {
       _accountError = e.toString();
-      return (error: e.toString(), devEmailCode: null, devPhoneCode: null);
+      return (error: e.toString(), devEmailCode: null);
     } finally {
       _busy = false;
       notifyListeners();
     }
   }
 
-  /// Регистрация, фаза 2: оба кода → сессия.
-  Future<String?> confirm(String emailCode, String phoneCode) async {
+  /// Регистрация, фаза 2: код почты → сессия.
+  Future<String?> confirm(String emailCode) async {
     final g = gateway;
     final email = _pendingEmail;
     if (g == null || email == null) {
@@ -237,8 +232,7 @@ class LicenseController extends ChangeNotifier {
     notifyListeners();
     try {
       final deviceId = await _deviceIdOrError();
-      final session = await g.confirm(
-          email, emailCode.trim(), phoneCode.trim(), deviceId);
+      final session = await g.confirm(email, emailCode.trim(), deviceId);
       _session = session;
       _pendingEmail = null;
       await sessionStore.save(session);
@@ -253,27 +247,21 @@ class LicenseController extends ChangeNotifier {
     }
   }
 
-  /// Переотправка кода подтверждения (channel: email | phone).
-  Future<({String? error, String? devEmailCode, String? devPhoneCode})>
-      resendConfirm(String channel) async {
+  /// Переотправка кода подтверждения на email.
+  Future<({String? error, String? devEmailCode})> resendConfirm() async {
     final g = gateway;
     final email = _pendingEmail;
     if (g == null || email == null) {
       return (
         error: 'Переотправка недоступна: нет ожидающей регистрации',
         devEmailCode: null,
-        devPhoneCode: null,
       );
     }
     try {
-      final res = await g.confirmResend(email, channel);
-      return (
-        error: res.error,
-        devEmailCode: res.devEmailCode,
-        devPhoneCode: res.devPhoneCode,
-      );
+      final res = await g.confirmResend(email);
+      return (error: res.error, devEmailCode: res.devEmailCode);
     } on Exception catch (e) {
-      return (error: e.toString(), devEmailCode: null, devPhoneCode: null);
+      return (error: e.toString(), devEmailCode: null);
     }
   }
 
@@ -350,6 +338,70 @@ class LicenseController extends ChangeNotifier {
       return const [];
     } on Exception {
       return const [];
+    }
+  }
+
+  // ---------- организация и участники (F-19 UI) ----------
+
+  /// Мои организации: [{org_id, name, role, ...}].
+  Future<({String? error, List<Map<String, dynamic>> orgs})>
+      organizationList() async {
+    final g = gateway;
+    final s = _session;
+    if (g == null || s == null) {
+      return (error: 'Войдите в аккаунт',
+              orgs: const <Map<String, dynamic>>[]);
+    }
+    try {
+      return (error: null, orgs: await g.myOrgs(s.token));
+    } on Exception catch (e) {
+      return (error: e.toString(), orgs: const <Map<String, dynamic>>[]);
+    }
+  }
+
+  /// Участники организации.
+  Future<({String? error, List<Map<String, dynamic>> members})>
+      membersList(String orgId) async {
+    final g = gateway;
+    final s = _session;
+    if (g == null || s == null) {
+      return (error: 'Войдите в аккаунт',
+              members: const <Map<String, dynamic>>[]);
+    }
+    try {
+      return (error: null, members: await g.listMembers(s.token, orgId));
+    } on Exception catch (e) {
+      return (error: e.toString(),
+              members: const <Map<String, dynamic>>[]);
+    }
+  }
+
+  /// Добавить участника (existing → added, новый email → invited по SMTP).
+  Future<({String? error, String? status})> memberAdd(
+      String orgId, String email, String role) async {
+    final g = gateway;
+    final s = _session;
+    if (g == null || s == null) {
+      return (error: 'Войдите в аккаунт', status: null);
+    }
+    try {
+      final resp = await g.addMember(s.token, orgId, email, role);
+      return (error: null, status: resp['status'] as String?);
+    } on Exception catch (e) {
+      return (error: e.toString(), status: null);
+    }
+  }
+
+  /// Убрать участника из организации.
+  Future<String?> memberRemove(String orgId, String userId) async {
+    final g = gateway;
+    final s = _session;
+    if (g == null || s == null) return 'Войдите в аккаунт';
+    try {
+      await g.removeMember(s.token, orgId, userId);
+      return null;
+    } on Exception catch (e) {
+      return e.toString();
     }
   }
 

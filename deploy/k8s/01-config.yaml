@@ -21,9 +21,4 @@ data:
   PP_SMTP_PASSWORD: "Info_Pp2026!"
   PP_SMTP_FROM: "info@prepressplan.ru"
   PP_SMTP_SSL: ""
-  # SMS-подтверждение телефона: sms.ru (api_id — в секрете pp-secrets,
-  # PP_SMS_API_ID). PP_SMS_TEST=1 — режим test=1 провайдера: без отправки
-  # и без списания (проверка интеграции); 0 — реальные SMS.
-  PP_SMS_PROVIDER: "sms_ru"
-  PP_SMS_TEST: "1"
   PP_RESEND_COOLDOWN: "60"

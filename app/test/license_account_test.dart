@@ -23,35 +23,33 @@ class FakeGateway implements AccountGateway {
   int purchaseCount = 0;
 
   static const devEmailCode = '111111';
-  static const devPhoneCode = '222222';
 
   /// Посев данных: регистрация + подтверждение (для setup в тестах).
   Future<void> seed(String email, String password) async {
-    await register('Тест Юзер', email, password, '+79991112233', 'dev-1');
-    await confirm(email, devEmailCode, devPhoneCode, 'dev-1');
+    await register('Тест Юзер', email, password, 'dev-1');
+    await confirm(email, devEmailCode, 'dev-1');
   }
 
   @override
   Future<RegisterPending> register(String name, String email,
-      String password, String phone, String deviceId) async {
+      String password, String deviceId) async {
     if (serverDown) throw const ApiException('Сервер недоступен');
     if (users.containsKey(email)) {
       throw const ApiException('Email уже зарегистрирован', statusCode: 409);
     }
     users[email] = password;
     _unverified.add(email);
-    return const RegisterPending(
-        devEmailCode: devEmailCode, devPhoneCode: devPhoneCode);
+    return const RegisterPending(devEmailCode: devEmailCode);
   }
 
   @override
-  Future<AccountSession> confirm(String email, String emailCode,
-      String phoneCode, String deviceId) async {
+  Future<AccountSession> confirm(
+      String email, String emailCode, String deviceId) async {
     if (serverDown) throw const ApiException('Сервер недоступен');
     if (!_unverified.contains(email)) {
       throw const ApiException('Аккаунт уже подтверждён', statusCode: 409);
     }
-    if (emailCode != devEmailCode || phoneCode != devPhoneCode) {
+    if (emailCode != devEmailCode) {
       throw const ApiException('Неверный или истёкший код', statusCode: 400);
     }
     _unverified.remove(email);
@@ -61,13 +59,10 @@ class FakeGateway implements AccountGateway {
   }
 
   @override
-  Future<RegisterPending> confirmResend(String email, String channel) async {
+  Future<RegisterPending> confirmResend(String email) async {
     if (serverDown) throw const ApiException('Сервер недоступен');
     if (!users.containsKey(email)) return const RegisterPending();
-    return RegisterPending(
-      devEmailCode: channel == 'email' ? devEmailCode : null,
-      devPhoneCode: channel == 'phone' ? devPhoneCode : null,
-    );
+    return const RegisterPending(devEmailCode: devEmailCode);
   }
 
   @override
@@ -87,7 +82,7 @@ class FakeGateway implements AccountGateway {
     }
     if (_unverified.contains(email)) {
       throw const ApiException('Аккаунт не подтверждён. '
-          'Введите коды с почты и из SMS.', statusCode: 403);
+          'Введите код с почты.', statusCode: 403);
     }
     // Политика 1/1: любая прежняя сессия вытесняется.
     _sessions.clear();
@@ -118,6 +113,49 @@ class FakeGateway implements AccountGateway {
     final code = '123456';
     _resetCodes[email] = code;
     return code; // dev-режим: код в ответе
+  }
+
+  // Организации/участники (F-19 UI) — простая модель в памяти.
+  final List<Map<String, dynamic>> orgs = [];
+  final Map<String, List<Map<String, dynamic>>> membersByOrg = {};
+
+  @override
+  Future<List<Map<String, dynamic>>> myOrgs(String token) async {
+    if (serverDown) throw const ApiException('Сервер недоступен');
+    return List.unmodifiable(orgs);
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> listMembers(
+      String token, String orgId) async {
+    if (serverDown) throw const ApiException('Сервер недоступен');
+    return List.unmodifiable(membersByOrg[orgId] ?? const []);
+  }
+
+  @override
+  Future<Map<String, dynamic>> addMember(
+      String token, String orgId, String email, String role) async {
+    if (serverDown) throw const ApiException('Сервер недоступен');
+    (membersByOrg[orgId] ??= []).add({
+      'user_id': 'u-$email',
+      'email': email,
+      'name': '',
+      'role': role,
+      'created_at': DateTime.now().toIso8601String(),
+    });
+    return {'status': 'added', 'member': {'user_id': 'u-$email',
+                                          'role': role}};
+  }
+
+  @override
+  Future<void> removeMember(String token, String orgId, String userId) async {
+    if (serverDown) throw const ApiException('Сервер недоступен');
+    final list = membersByOrg[orgId];
+    final before = list?.length ?? 0;
+    list?.removeWhere((m) => m['user_id'] == userId);
+    if ((list?.length ?? 0) == before) {
+      throw const ApiException('Участник не найден', statusCode: 404);
+    }
   }
 
   @override
@@ -203,16 +241,14 @@ void main() {
     await lic.init();
     expect(lic.ready, true);
 
-    final res = await lic.register('Тест Юзер', 'user@example.com', 'secret1', '+79991234567');
+    final res = await lic.register('Тест Юзер', 'user@example.com', 'secret1');
     expect(res.error, isNull);
     expect(res.devEmailCode, FakeGateway.devEmailCode);
-    expect(res.devPhoneCode, FakeGateway.devPhoneCode);
     expect(lic.loggedIn, false); // фаза 1 — сессии ещё нет
     expect(lic.needsConfirm, true);
     expect(lic.accountEmail, isNull);
 
-    final cerr = await lic.confirm(
-        FakeGateway.devEmailCode, FakeGateway.devPhoneCode);
+    final cerr = await lic.confirm(FakeGateway.devEmailCode);
     expect(cerr, isNull);
     expect(lic.loggedIn, true);
     expect(lic.needsConfirm, false);
@@ -260,9 +296,8 @@ void main() {
   test('выход отзывает сессию и возвращает к офлайн-состоянию', () async {
     final lic = make();
     await lic.init();
-    await lic.register('Тест Юзер', 'x@y.zz', 'secret1', '+79991234567');
-    await lic.confirm(
-        FakeGateway.devEmailCode, FakeGateway.devPhoneCode);
+    await lic.register('Тест Юзер', 'x@y.zz', 'secret1');
+    await lic.confirm(FakeGateway.devEmailCode);
     await lic.purchase('year');
     expect(lic.loggedIn, true);
     expect(lic.entitlement.pro, true);
@@ -340,10 +375,7 @@ void main() {
         req.response.write(jsonEncode({
           'pending': true,
           'email': 'new@example.com',
-          'phone': '+79991234567',
           'dev_email_code': '654321',
-          'dev_phone_code': '123456',
-          'sms_sent': false,
         }));
       } else if (req.uri.path == '/auth/confirm') {
         req.response.statusCode = 201;
@@ -360,13 +392,12 @@ void main() {
     });
     final api = AuthApi(baseUrl: 'http://127.0.0.1:${server.port}');
     final pending = await api.register(
-        'Новый', 'new@example.com', 'secret1', '+79991234567', 'dev-1');
+        'Новый', 'new@example.com', 'secret1', 'dev-1');
     expect(pending.ok, true);
     expect(pending.devEmailCode, '654321');
-    expect(pending.devPhoneCode, '123456');
 
-    final session = await api.confirm(
-        'new@example.com', '654321', '123456', 'dev-1');
+    final session =
+        await api.confirm('new@example.com', '654321', 'dev-1');
     expect(session.token, 'tok-confirm');
     expect(session.email, 'new@example.com');
     expect(paths, ['/auth/register', '/auth/confirm']);
@@ -376,15 +407,14 @@ void main() {
   test('login с 403 выставляет needsConfirm', () async {
     final lic = make();
     await lic.init();
-    await lic.register('Тест Юзер', 'gate@example.com', 'secret1', '+79991234567');
+    await lic.register('Тест Юзер', 'gate@example.com', 'secret1');
     // Выход из состояния pending имитируем: новая попытка входа без confirm.
     final err = await lic.login('gate@example.com', 'secret1');
     expect(err, isNotNull);
     expect(lic.needsConfirm, true);
     expect(lic.loggedIn, false);
     // После подтверждения вход работает.
-    final cerr = await lic.confirm(
-        FakeGateway.devEmailCode, FakeGateway.devPhoneCode);
+    final cerr = await lic.confirm(FakeGateway.devEmailCode);
     expect(cerr, isNull);
     expect(lic.loggedIn, true);
   });
@@ -394,9 +424,8 @@ void main() {
   test('init: сервер ответил 401 → локальная сессия сброшена', () async {
     final lic = make();
     await lic.init();
-    await lic.register('Тест Юзер', 'kick@example.com', 'secret1', '+79991234567');
-    await lic.confirm(
-        FakeGateway.devEmailCode, FakeGateway.devPhoneCode);
+    await lic.register('Тест Юзер', 'kick@example.com', 'secret1');
+    await lic.confirm(FakeGateway.devEmailCode);
     expect(lic.loggedIn, true);
 
     // «Другое устройство» вошло — нашу сессию вытеснили (сервер: 401).
@@ -411,9 +440,8 @@ void main() {
       () async {
     final lic = make();
     await lic.init();
-    await lic.register('Тест Юзер', 'ens@example.com', 'secret1', '+79991234567');
-    await lic.confirm(
-        FakeGateway.devEmailCode, FakeGateway.devPhoneCode);
+    await lic.register('Тест Юзер', 'ens@example.com', 'secret1');
+    await lic.confirm(FakeGateway.devEmailCode);
     expect(lic.loggedIn, true);
 
     // Сервер недоступен — офлайн-сессию не трогаем.
@@ -429,6 +457,55 @@ void main() {
     expect(lic.accountEmail, isNull);
   });
 
+  test('организация: список участников, добавление, удаление', () async {
+    final lic = make();
+    await lic.init();
+    await lic.register('Владелец', 'owner@org.test', 'secret1');
+    await lic.confirm(FakeGateway.devEmailCode);
+    expect(lic.loggedIn, true);
+    fake.orgs.add({'org_id': 'org-1', 'name': 'Типография', 'role': 'owner'});
+    fake.membersByOrg['org-1'] = [
+      {'user_id': 'u1', 'email': 'owner@org.test', 'name': 'Владелец',
+       'role': 'owner', 'created_at': '2026-09-01'},
+    ];
+
+    final orgs = await lic.organizationList();
+    expect(orgs.error, isNull);
+    expect(orgs.orgs.single['name'], 'Типография');
+
+    var m = await lic.membersList('org-1');
+    expect(m.error, isNull);
+    expect(m.members.single['email'], 'owner@org.test');
+
+    final add = await lic.memberAdd('org-1', 'new@org.test', 'admin');
+    expect(add.error, isNull);
+    expect(add.status, 'added');
+    m = await lic.membersList('org-1');
+    expect(m.members.length, 2);
+    expect(m.members[1]['role'], 'admin');
+
+    final rm = await lic.memberRemove('org-1', 'u-new@org.test');
+    expect(rm, isNull);
+    m = await lic.membersList('org-1');
+    expect(m.members.length, 1);
+
+    // Нет организации (не вошли) — понятная ошибка.
+    final lic2 = LicenseController(
+      store: EntitlementStore(dir.path),
+      client: LicenseClient(),
+      stateDir: dir.path,
+    );
+    await lic2.init();
+    final out = await lic2.organizationList();
+    expect(out.error, 'Войдите в аккаунт');
+
+    // Сервер недоступен — ошибка не роняет экран.
+    fake.serverDown = true;
+    final down = await lic.membersList('org-1');
+    expect(down.error, isNotNull);
+    expect(down.members, isEmpty);
+  });
+
   test('покупка: checkout открывает страницу оплаты, Pro — после вебхука',
       () async {
     final opened = <String>[];
@@ -440,9 +517,8 @@ void main() {
       openUrl: opened.add,
     );
     await lic.init();
-    await lic.register('Тест Юзер', 'pay404@example.com', 'secret1', '+79991234567');
-    await lic.confirm(
-        FakeGateway.devEmailCode, FakeGateway.devPhoneCode);
+    await lic.register('Тест Юзер', 'pay404@example.com', 'secret1');
+    await lic.confirm(FakeGateway.devEmailCode);
     fake.pendingPaymentUrl = 'https://yookassa.test/pay/abc';
 
     final err = await lic.purchase('month');
@@ -461,9 +537,8 @@ void main() {
   test('devices при открытом приложении: 401 → сессия сброшена', () async {
     final lic = make();
     await lic.init();
-    await lic.register('Тест Юзер', 'kick2@example.com', 'secret1', '+79991234567');
-    await lic.confirm(
-        FakeGateway.devEmailCode, FakeGateway.devPhoneCode);
+    await lic.register('Тест Юзер', 'kick2@example.com', 'secret1');
+    await lic.confirm(FakeGateway.devEmailCode);
     expect(lic.loggedIn, true);
 
     fake.expiredSessions = true;
