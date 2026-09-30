@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Вход в «Препресс-Планер» — лончер</title>
+  <!--
+    Залогиненный лончер (web).
+    Делает POST /auth/login, кладёт сессию в тот же ключ localStorage,
+    который читает приложение (SessionStore → state/session.json), и
+    уходит на главную. Пароль запоминается по желанию (ключ pp_launcher.*);
+    в git/в сборку пароль не попадает — он живёт только в браузере.
+  -->
+  <style>
+    :root { color-scheme: light; }
+    body {
+      margin: 0; min-height: 100vh; display: flex; align-items: center;
+      justify-content: center; background: #f4f6f9;
+      font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI",
+            "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: #1c2733;
+    }
+    .card {
+      width: 100%; max-width: 380px; background: #fff; border-radius: 12px;
+      padding: 28px 26px; box-shadow: 0 8px 28px rgba(28, 39, 51, .10);
+    }
+    h1 { font-size: 19px; margin: 0 0 4px; font-weight: 600; }
+    p.sub { margin: 0 0 18px; color: #5b6b7c; font-size: 13px; }
+    label { display: block; font-size: 13px; color: #44566a; margin: 12px 0 4px; }
+    input[type=email], input[type=password] {
+      width: 100%; box-sizing: border-box; padding: 9px 10px; font-size: 14px;
+      border: 1px solid #c9d4e0; border-radius: 8px; background: #fff;
+    }
+    input:focus { outline: 2px solid #2e5a88; outline-offset: -1px; }
+    .remember { display: flex; align-items: center; gap: 8px; margin-top: 12px;
+                font-size: 13px; color: #44566a; }
+    button {
+      width: 100%; margin-top: 18px; padding: 10px 12px; font-size: 15px;
+      border: 0; border-radius: 8px; background: #2e5a88; color: #fff;
+      cursor: pointer;
+    }
+    button:disabled { background: #9db2c6; cursor: default; }
+    #status { min-height: 18px; margin-top: 12px; font-size: 13px; }
+    #status.err { color: #c62828; }
+    #status.ok { color: #2e7d32; }
+    .hint { margin-top: 14px; font-size: 12px; color: #7b8a9b; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Препресс-Планер</h1>
+    <p class="sub">Вход в аккаунт — дальше откроется приложение.</p>
+
+    <label for="email">Email</label>
+    <input id="email" type="email" autocomplete="username" spellcheck="false">
+
+    <label for="password">Пароль</label>
+    <input id="password" type="password" autocomplete="current-password">
+
+    <div class="remember">
+      <input id="remember" type="checkbox" checked>
+      <label for="remember" style="margin:0">Запомнить пароль на этом устройстве</label>
+    </div>
+
+    <button id="go" type="button">Войти и открыть приложение</button>
+    <div id="status" role="status"></div>
+
+    <p class="hint">
+      Политика 1/1: вход вытесняет предыдущую сессию аккаунта.
+      Пароль хранится только в этом браузере (localStorage) и отправляется
+      только на prepressplan.ru.
+    </p>
+  </div>
+
+<script>
+(function () {
+  'use strict';
+  // Ключ сессии = тот, что пишет SessionStore в web-сборке (stateDir 'state').
+  var KEY_SESSION = 'pp_prepress_planner.state/session.json';
+  var KEY_PASS = 'pp_launcher.password.v1';
+  var KEY_EMAIL = 'pp_launcher.email.v1';
+  var DEFAULT_EMAIL = 'vladimirkarateev@mail.ru';
+
+  var emailEl = document.getElementById('email');
+  var passEl = document.getElementById('password');
+  var rememberEl = document.getElementById('remember');
+  var goEl = document.getElementById('go');
+  var statusEl = document.getElementById('status');
+
+  function status(text, cls) {
+    statusEl.textContent = text || '';
+    statusEl.className = cls || '';
+  }
+
+  function busy(on) {
+    goEl.disabled = on;
+    passEl.disabled = on;
+    emailEl.disabled = on;
+  }
+
+  async function me(token) {
+    var r = await fetch('/auth/me', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (r.status === 401) return null;
+    if (!r.ok) throw new Error('Сервер ответил ' + r.status);
+    try { return await r.json(); } catch (e) { return {}; }
+  }
+
+  async function login(email, password) {
+    var r = await fetch('/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email, password: password })
+    });
+    var j = null;
+    try { j = await r.json(); } catch (e) { /* пустой ответ */ }
+    if (!r.ok) {
+      var msg = (j && (j.detail || (j.error && j.error.message))) ||
+                ('Сервер ответил ' + r.status);
+      var err = new Error(msg);
+      err.status = r.status;
+      throw err;
+    }
+    return j;
+  }
+
+  function saveSession(token, email) {
+    localStorage.setItem(KEY_SESSION,
+        JSON.stringify({ token: token, email: email }));
+  }
+
+  function enter(resp, email) {
+    var user = resp.user || {};
+    saveSession(resp.token, user.email || email);
+    status('Вошли — открываем приложение…', 'ok');
+    setTimeout(function () { location.href = '/'; }, 250);
+  }
+
+  async function start() {
+    var savedEmail = localStorage.getItem(KEY_EMAIL) || DEFAULT_EMAIL;
+    emailEl.value = savedEmail;
+    rememberEl.checked = !!localStorage.getItem(KEY_PASS);
+
+    // 1) Уже есть живая сессия — просто заходим (не вытесняем сессию логином).
+    try {
+      var raw = localStorage.getItem(KEY_SESSION);
+      if (raw) {
+        var token = JSON.parse(raw).token;
+        if (token) {
+          var who = await me(token);
+          if (who) { status('Сессия активна — открываем приложение…', 'ok');
+                     setTimeout(function () { location.href = '/'; }, 250); return; }
+          localStorage.removeItem(KEY_SESSION);
+        }
+      }
+    } catch (e) { /* сеть недоступна — идём на форму */ }
+
+    // 2) Сохранённый пароль — тихий вход.
+    var savedPass = localStorage.getItem(KEY_PASS);
+    if (savedPass) {
+      busy(true);
+      status('Входим автоматически…', 'ok');
+      try {
+        var resp = await login(emailEl.value.trim(), savedPass);
+        enter(resp, emailEl.value.trim());
+        return;
+      } catch (e) {
+        localStorage.removeItem(KEY_PASS);
+        status('Сохранённый пароль не подошёл — введите заново.', 'err');
+      } finally {
+        busy(false);
+      }
+    }
+    status('');
+    passEl.focus();
+  }
+
+  async function onSubmit() {
+    var email = emailEl.value.trim();
+    var password = passEl.value;
+    if (!email || !password) { status('Укажите email и пароль.', 'err'); return; }
+    busy(true);
+    status('Входим…', 'ok');
+    try {
+      localStorage.setItem(KEY_EMAIL, email);
+      if (rememberEl.checked) localStorage.setItem(KEY_PASS, password);
+      else localStorage.removeItem(KEY_PASS);
+      var resp = await login(email, password);
+      enter(resp, email);
+    } catch (e) {
+      localStorage.removeItem(KEY_PASS);
+      status(e.message || 'Не удалось войти.', 'err');
+      busy(false);
+    }
+  }
+
+  goEl.addEventListener('click', onSubmit);
+  passEl.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Enter') onSubmit();
+  });
+  start();
+})();
+</script>
+</body>
+</html>
