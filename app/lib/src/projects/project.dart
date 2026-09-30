@@ -381,6 +381,18 @@ class ProjectStore {
     return _store.listJsonNames();
   }
 
+  /// Занято ли имя: в облаке — по списку организации, локально — по файлу
+  /// (имя санитайзится так же, как при сохранении — два разных имени,
+  /// дающих один файл, тоже считаются занятыми).
+  Future<bool> exists(String name) async {
+    final token = await _cloudToken();
+    if (token != null) {
+      final items = await api!.list(token);
+      return _findByName(items, name) != null;
+    }
+    return await _store.read(_relFor(name)) != null;
+  }
+
   /// Идентификатор проекта в облаке (создаёт при отсутствии) — нужен для
   /// загрузки файлов (`POST /api/projects/{id}/files`, ADR-7).
   /// null — вне облачного режима (нет api либо нет сессии).

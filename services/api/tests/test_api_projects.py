@@ -199,6 +199,45 @@ def test_create_project_validates_name(env):
     assert resp.json()["error"]["code"] == "invalid_name"
 
 
+def test_create_project_duplicate_name_blocked(env):
+    """Одноимённый проект в организации не создаётся (409)."""
+    _create_project(env, name="Этикетка")
+    resp = env.post("/api/projects", json={"name": "  Этикетка  "},
+                    headers=_headers(TOKEN_A))
+    assert resp.status_code == 409
+    assert resp.json()["error"]["code"] == "project_exists"
+    assert "уже существует" in resp.json()["error"]["message"]
+    # В организации по-прежнему один проект с этим именем.
+    items = env.get("/api/projects", headers=_headers(TOKEN_A)).json()["items"]
+    assert [p["name"] for p in items] == ["Этикетка"]
+    # Другая организация с тем же именем — нормально.
+    _create_project(env, TOKEN_B, "Этикетка")
+    # После мягкого удаления имя снова свободно.
+    pid = env.get("/api/projects", headers=_headers(TOKEN_A)).json()["items"][0]
+    assert env.delete(f"/api/projects/{pid['id']}",
+                      headers=_headers(TOKEN_A)).status_code == 204
+    _create_project(env, name="Этикетка")
+
+
+def test_rename_project_to_existing_name_blocked(env):
+    """Переименование на занятое имя — 409; своё/без изменений — ок."""
+    first = _create_project(env, name="Первый")
+    second = _create_project(env, name="Второй")
+    resp = env.patch(f"/api/projects/{second['project_id']}",
+                     json={"name": "Первый"}, headers=_headers(TOKEN_A))
+    assert resp.status_code == 409
+    assert resp.json()["error"]["code"] == "project_exists"
+    # Переименование в собственное текущее имя — не блокируется.
+    resp = env.patch(f"/api/projects/{first['project_id']}",
+                     json={"name": "Первый"}, headers=_headers(TOKEN_A))
+    assert resp.status_code == 200
+    # Свободное имя — переименование проходит.
+    resp = env.patch(f"/api/projects/{second['project_id']}",
+                     json={"name": "Третий"}, headers=_headers(TOKEN_A))
+    assert resp.status_code == 200
+    assert resp.json()["project"]["name"] == "Третий"
+
+
 def test_list_projects_is_isolated_by_org(env):
     _create_project(env, TOKEN_A, "Проект A")
     _create_project(env, TOKEN_B, "Проект B")

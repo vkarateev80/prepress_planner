@@ -201,6 +201,18 @@ class Repo:
                 " WHERE org_id = ? AND deleted_at IS NULL", (org_id,))
         return int((row or {}).get("n") or 0)
 
+    def project_name_exists(self, org_id: str, name: str,
+                            exclude_id: Optional[str] = None) -> bool:
+        """Есть ли живой проект организации с таким названием."""
+        sql = ("SELECT 1 FROM projects"
+               " WHERE org_id = ? AND name = ? AND deleted_at IS NULL")
+        params: List[Any] = [org_id, name]
+        if exclude_id is not None:
+            sql += " AND id != ?"
+            params.append(exclude_id)
+        with self.db.read() as conn:
+            return conn.query_one(sql, tuple(params)) is not None
+
     def rename_project(self, org_id: str, project_id: str, name: str) -> bool:
         with self.db.tx() as conn:
             n = conn.execute(

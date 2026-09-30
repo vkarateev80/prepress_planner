@@ -27,6 +27,7 @@ class ProjectsScreen extends StatefulWidget {
 class _ProjectsScreenState extends State<ProjectsScreen> {
   List<String> _names = [];
   final _nameCtrl = TextEditingController(text: 'Новый проект');
+  String _error = '';
 
   @override
   void initState() {
@@ -42,12 +43,22 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
   Future<void> _create() async {
     final name = _nameCtrl.text.trim();
     if (name.isEmpty) return;
-    // Free-квота: 1 проект.
+    // Free-квота: 1 проект (проверка синхронная — раньше асинхронной).
     final gate = widget.gate;
     if (gate != null && !gate.hasProAccess && _names.isNotEmpty) {
       widget.onNeedPro?.call();
       return;
     }
+    // Одноимённый проект не создаём: локально это была бы перезапись файла.
+    if (await widget.store.exists(name)) {
+      if (mounted) {
+        setState(() =>
+            _error = 'Проект «$name» уже существует — выберите другое имя.');
+      }
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _error = '');
     await widget.store.save(Project(name: name));
     final p = await widget.store.load(name);
     if (p != null) widget.onOpen(p);
@@ -80,6 +91,11 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
                 label: const Text('Создать')),
           ],
         ),
+        if (_error.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Text(_error,
+              style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
+        ],
         const SizedBox(height: 16),
         for (final name in _names)
           Card(

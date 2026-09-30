@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:prepress_core/prepress_core.dart';
 import 'package:prepress_planner/src/projects/project.dart';
 import 'package:prepress_planner/src/screens/home_shell.dart';
+import 'package:prepress_planner/src/screens/projects_screen.dart';
 import 'package:prepress_planner/src/widgets/geometry_canvas.dart';
 import 'package:prepress_planner/src/widgets/params_form.dart';
 import 'package:prepress_planner/src/widgets/variants_table.dart';
@@ -106,5 +107,58 @@ void main() {
             as Map<String, dynamic>;
     expect(raw['schemaVersion'], 2);
     await dir.delete(recursive: true);
+  });
+
+  test('project store: exists — имя занято до и после сохранения', () async {
+    final dir = await Directory.systemTemp.createTemp('pp_exists');
+    final store = ProjectStore(dir.path);
+    expect(await store.exists('Эталон'), isFalse);
+    await store.save(Project(name: 'Эталон'));
+    expect(await store.exists('Эталон'), isTrue);
+    expect(await store.exists('Другой'), isFalse);
+    await dir.delete(recursive: true);
+  });
+
+  testWidgets('проекты: создание одноимённого проекта блокируется',
+      (tester) async {
+    final dir = Directory.systemTemp.createTempSync('pp_dup');
+    final store = ProjectStore(dir.path);
+    Project? opened;
+    await tester.runAsync(() async {
+      await store.save(Project(name: 'Этикетка'));
+    });
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: ProjectsScreen(store: store, onOpen: (p) => opened = p),
+      ),
+    ));
+    await tester.pump(const Duration(milliseconds: 50));
+
+    await tester.enterText(find.byType(TextField).first, 'Этикетка');
+    await tester.tap(find.text('Создать'));
+    // exists() делает реальный File IO: чередуем реальный event loop
+    // (runAsync) и слив микротасков фейк-зоны (pump).
+    for (var i = 0; i < 6; i++) {
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)));
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+
+    expect(find.textContaining('уже существует'), findsOneWidget);
+    expect(opened, isNull); // проект не открыт и не перезаписан
+    // Дубля не появилось (реальный File IO — только через runAsync).
+    expect(await tester.runAsync(() => store.listNames()), ['Этикетка']);
+
+    // Новое имя — создаётся как обычно.
+    await tester.enterText(find.byType(TextField).first, 'Новая этикетка');
+    await tester.tap(find.text('Создать'));
+    for (var i = 0; i < 6; i++) {
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)));
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    expect(await tester.runAsync(() => store.listNames()),
+        containsAll(['Этикетка', 'Новая этикетка']));
+    dir.deleteSync(recursive: true);
   });
 }

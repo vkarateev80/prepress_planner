@@ -395,6 +395,10 @@ def create_project(body: ProjectCreate,
     cfg = get_config()
     principal, membership = require_role(cfg, authorization, body.org_id, "member")
     name = _validate_name(body.name)
+    if get_repo().project_name_exists(membership.org_id, name):
+        raise ApiError(409, "project_exists",
+                       f"Проект «{name}» уже существует — выберите "
+                       "другое название.")
     token = (authorization or "")[7:].strip()
     ent = _entitlement_for(cfg, token, membership.org_id)
     limit = projects_limit(ent)
@@ -454,10 +458,16 @@ def patch_project(body: ProjectPatch,
                   authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
     cfg = get_config()
     _, membership = require_role(cfg, authorization, None, "member")
-    _project_or_404(membership.org_id, project_id)
+    row = _project_or_404(membership.org_id, project_id)
     if body.name is not None:
+        new_name = _validate_name(body.name)
+        if (new_name != row["name"] and get_repo().project_name_exists(
+                membership.org_id, new_name, exclude_id=project_id)):
+            raise ApiError(409, "project_exists",
+                           f"Проект «{new_name}» уже существует — выберите "
+                           "другое название.")
         if not get_repo().rename_project(membership.org_id, project_id,
-                                         _validate_name(body.name)):
+                                         new_name):
             raise ApiError(404, "project_not_found", "Проект не найден.")
     if body.state is not None:
         get_repo().put_project_state(membership.org_id, project_id, body.state)
