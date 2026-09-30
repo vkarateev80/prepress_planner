@@ -823,3 +823,32 @@ TTL 30 мин, отзыв всех сессий) — без изменений; 
   `flutter test` → **62/62** (+1: «восстановление пароля: «Забыли пароль?»
   → код → новый пароль»: шаг сброса открывается, код и пароль из фейка
   меняют пароль).
+
+### 24.1 Деплой на прод (2026-09-30)
+
+Коммит `8626512` (push). На сервере `185.227.144.229`
+(`/opt/pp/stack`, вход `ssh vps-cleanfine`):
+
+- Синхронизированы `services/auth/`, `deploy/web/` (свежий
+  `flutter build web`) и манифесты `01-config.yaml`/`20-auth.yaml`.
+- Собраны и импортированы образы `pp-auth` и `pp-web`
+  (`docker build` → `docker save | k3s ctr images import`).
+- `kubectl apply` 01-config + 20-auth (ConfigMap и Deployment без
+  `PP_SMS_*`), `rollout restart deploy/auth deploy/web` — оба
+  **Successful**, 9/9 подов Running.
+
+Живая проверка `https://prepressplan.ru` (фактические ответы):
+- `auth /healthz` → `verify:"email"`, поля `sms` больше **нет**;
+  `smtp:true`, `reset_ttl_min:30` (SMTP жив — коды уходят письмом).
+- `POST /auth/register` **без телефона** (email уже существует) →
+  **409** «Email уже зарегистрирован» — раньше без `phone` было бы 422;
+  `POST /auth/confirm` **без `phone_code`** → **409** «Аккаунт уже
+  подтверждён» (не 422); `POST /auth/confirm/resend` **без `channel`**
+  → **200** `{ok:true}`.
+- ConfigMap `pp-config`: ключей `PP_SMS_*` нет; у Deployment `auth`
+  переменных `PP_SMS_*` нет (проверено `kubectl get deploy -o json`).
+- Веб-бандл: md5 `main.dart.js` на проде совпадает со свежей локальной
+  сборкой (`86588554728f705bb5638eb0cbd82c4f`) — в проде новый UI
+  (кнопка «Забыли пароль?», форма без телефона, экран организации).
+- `monitor.py --dry-run` → все 9 проверок OK; лог auth — только 200/409
+  от смоук-запросов, ошибок нет.

@@ -220,6 +220,15 @@ function esc(v) {
   return String(v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 function shortId(v) { v = String(v || ''); return v.length > 14 ? v.slice(0, 8) + '…' : v; }
+// Даты из auth/Billing: у пользователей и участников — epoch (REAL, секунды),
+// у заказов — ISO-строка. Всё приводим к YYYY-MM-DD (локальная дата).
+function fmtDate(v) {
+  if (v === null || v === undefined || v === '') return '';
+  const d = typeof v === 'number' ? new Date(v * 1000) : new Date(v);
+  if (isNaN(d.getTime())) return String(v).slice(0, 10);
+  const p = n => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+}
 
 function showApp(email) {
   $('loginView').classList.add('hide');
@@ -302,7 +311,7 @@ async function loadUsers() {
       <tr>
         <td>${esc(u.email)} ${u.verified ? '' : '<span class="pill warn">не подтв.</span>'}</td>
         <td>${esc(u.name)}</td><td class="mono">${esc(u.phone)}</td>
-        <td>${esc((u.created_at || '').slice(0, 10))}</td>
+        <td>${esc(fmtDate(u.created_at))}</td>
         <td>${esc(u.active_sessions)}</td>
         <td class="muted">${esc((u.orgs || []).join(', '))}</td>
         <td class="row" style="gap:6px;white-space:nowrap">
@@ -343,7 +352,7 @@ async function loadAccess() {
     $('accessBody').innerHTML = data.members.map(m => `
       <tr><td>${esc(m.email)}</td><td>${esc(m.name || '')}</td>
         <td><span class="pill ${m.role === 'owner' ? 'ok' : m.role === 'admin' ? 'warn' : 'mute'}">${esc(m.role)}</span></td>
-        <td>${esc(String(m.created_at || '').slice(0, 10))}</td>
+        <td>${esc(fmtDate(m.created_at))}</td>
         <td>${m.role === 'owner' ? '' :
           `<button class="ghost danger" data-uid="${esc(m.user_id)}">Убрать</button>`}</td>
       </tr>`).join('');
