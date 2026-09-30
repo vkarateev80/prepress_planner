@@ -737,3 +737,22 @@ admin/owner; полный набор (мониторинг бэкенда, ак�
   CI-строка `pytest services/admin/tests`.
 - **Прогоны:** `pytest services/admin/tests` — **9/9**; auth — 34; полный
   контур — см. §21.1 (прогон после деплоя).
+
+### 21.1 Деплой и живая проверка (2026-09-29)
+
+Коммит `201a212` (push). На сервере собраны и импортированы `pp-admin`,
+`pp-auth` (роль admin), `pp-web` (location /admin); применён
+`25-admin.yaml`; rollout admin+auth+web — Successful, поды Running.
+
+Живой прогон `https://prepressplan.ru`:
+- `GET /admin/` → **200**, HTML панели (20 946 байт);
+- `GET /admin/api/overview` без токена → **401**;
+- `POST /admin/api/login` от `k8s-accept…` (member) → **403** «Требуется
+  роль owner или admin в системной организации»;
+- `POST /admin/api/login` от `info@…` (не член системной org) → **403**;
+- неверный пароль владельца → **401** от auth;
+- healthz admin: `db: configured`, `auth_db: /srv/auth/data/auth.db`.
+
+Вход владельца: `vladimirkarateev@mail.ru` добавлен в системную
+организацию ролью **owner** (k8s-accept понижен до member) — позитивный
+вход выполняется его паролем (в тестах гейт покрыт: владелец → 200).
