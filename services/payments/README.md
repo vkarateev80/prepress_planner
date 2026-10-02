@@ -149,6 +149,10 @@ entitlement-синхронизация прав.
 | `PP_RETURN_PATH` | `/billing/return` | путь возврата после оплаты |
 | `PP_RETURN_URL` | пусто | явный `return_url` (переопределяет `PP_PUBLIC_BASE`) |
 | `PP_WEBHOOK_MAX_BYTES` | `65536` | лимит тела вебхука |
+| `PP_RENEWAL_ENABLED` | `1` | `0` — выключить фоновое автопродление |
+| `PP_RENEWAL_INTERVAL_MIN` | `60` | период цикла автопродления, мин |
+| `PP_RENEWAL_LEAD_HOURS` | `24` | за сколько часов до конца периода списывать |
+| `PP_RENEWAL_MAX_ATTEMPTS` | `5` | неудачных списаний до отвязки карты |
 
 Секреты ЮKassa в клиент не отдаются и в репозитории не хранятся.
 
@@ -160,8 +164,17 @@ entitlement-синхронизация прав.
 * «Заказ» у ЮKassa = платёж: `provider_order_id == provider_payment_id` для
   событий `payment.*`; для `refund.*` `provider_payment_id` — id возврата,
   `payment_id`/`provider_order_id` — id исходного платежа.
-* Рекуррентные автоплатежи требуют активации у мерчанта; до этого отмена
-  (`cancel_at_period_end`) прекращает продление у нас, новых списаний нет.
+* **Автопродление**: фоновый цикл billing (`run_renewals`, интервал
+  `PP_RENEWAL_INTERVAL_MIN`) списывает сохранённый способ оплаты
+  (`POST /payments` + `payment_method_id`, без confirmation — безакцептно)
+  за `PP_RENEWAL_LEAD_HOURS` до конца периода; продление применяет
+  штатный вебхук `payment.succeeded` (встык к текущему периоду). Ошибка
+  списания → ретраи до `PP_RENEWAL_MAX_ATTEMPTS`, затем карта отвязывается
+  (`saved_payment_method_id = NULL`) и подписка истекает до Free.
+  Отмена (`cancel_at_period_end`) исключает подписку из выборки —
+  `POST /payments/subscription/cancel|resume` управляют этим флагом.
+  Для ПЕРВОГО сохранения карты нужен `YUKASSA_SAVE_PAYMENT_METHOD=1`
+  (активация сохранения способов оплаты у мерчанта ЮKassa).
 * Ключей в среде нет → `UnconfiguredProvider`: checkout/возврат отвечают 503 с
   понятным текстом. «Тестового подтверждения» оплаты в сервисе нет.
 
@@ -206,8 +219,9 @@ PP_TEST_DB_URL=postgresql://… python -m pytest tests -q    # та же сюи�
 * Реальные `YUKASSA_SHOP_ID` / `YUKASSA_SECRET_KEY` / `YUKASSA_WEBHOOK_SECRET`
   в секрет-менеджере прод-контура + регистрация URL вебхука в личном кабинете
   ЮKassa (в compose пока плейсхолдеры `test_shop`/`test_secret`).
-* Автоплатежи (рекуррент): активация у мерчанта, `scheduled`-списания
-  (`YUKASSA_SAVE_PAYMENT_METHOD=1`) и сверка `payment_method.saved`.
+* Автоплатежи: цикл списаний реализован — остаётся внешнее: активация
+  сохранения способов оплаты у мерчанта ЮKassa + `YUKASSA_SAVE_PAYMENT_METHOD=1`
+  (иначе карты не сохраняются и `saved_payment_method_id` пуст).
 * Чеки/фискализация (`receipt`) — по требованиям мерчанта.
 * Регулярная сверка (reconciliation) `orders`/`transactions` с выпиской ЮKassa
   (для неё уже есть `GET /payments/transactions`).

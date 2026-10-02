@@ -298,6 +298,50 @@ class LicenseController extends ChangeNotifier {
     }
   }
 
+  /// Состояние подписки на сервере (план, период, автопродление).
+  Future<({String? error, ServerSubscription? sub})> subscriptionState() async {
+    final g = gateway;
+    final s = _session;
+    if (g == null || s == null) {
+      return (error: 'Войдите в аккаунт', sub: null);
+    }
+    try {
+      return (error: null, sub: await g.subscription(s.token));
+    } on Exception catch (e) {
+      return (error: e.toString(), sub: null);
+    }
+  }
+
+  /// Отменить автопродление: Pro остаётся до конца периода, списаний не будет.
+  Future<String?> cancelSubscription() =>
+      _subscriptionAction('Отмена недоступна: войдите в аккаунт',
+          (g, t) => g.cancelSubscription(t));
+
+  /// Возобновить автопродление (списания вернутся со следующего периода).
+  Future<String?> resumeSubscription() =>
+      _subscriptionAction('Возобновление недоступно: войдите в аккаунт',
+          (g, t) => g.resumeSubscription(t));
+
+  Future<String?> _subscriptionAction(
+      String noSession, Future<void> Function(AccountGateway g, String token)
+          action) async {
+    final g = gateway;
+    final s = _session;
+    if (g == null || s == null) return noSession;
+    _busy = true;
+    notifyListeners();
+    try {
+      await action(g, s.token);
+      return null;
+    } on Exception catch (e) {
+      _accountError = e.toString();
+      return e.toString();
+    } finally {
+      _busy = false;
+      notifyListeners();
+    }
+  }
+
   /// Проверка живости сессии (политика 1/1): вызывается при переключении
   /// вкладок; сервер 401 → локальная сессия сбрасывается сразу, без
   /// перезагрузки. Сетевые ошибки игнорируются (офлайн не разлогинивает).

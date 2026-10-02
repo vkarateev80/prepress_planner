@@ -187,6 +187,17 @@ class PaymentProvider:
         """Создать платёж у провайдера → {provider_payment_id, confirmation_url}."""
         raise NotImplementedError
 
+    # -- автоплатёж (сохранённый способ оплаты) ---------------------------
+    def create_renewal(self, order: Dict[str, Any], plan: Dict[str, Any],
+                       saved_payment_method_id: str,
+                       customer_email: Optional[str] = None) -> Dict[str, Any]:
+        """Безакцептное списание продления по сохранённому способу оплаты.
+
+        ЮKassa: `POST /payments` с `payment_method_id` — без confirmation
+        (дополнительного подтверждения от пользователя не требуется).
+        """
+        raise NotImplementedError
+
     # -- вебхук -----------------------------------------------------------
     def process_webhook(self, raw_body: bytes,
                         headers: Mapping[str, str]) -> Dict[str, Any]:
@@ -339,6 +350,63 @@ class YooKassaProvider(PaymentProvider):
             "raw": data,
         }
 
+    # -- автоплатёж -------------------------------------------------------
+    def create_renewal(self, order: Dict[str, Any], plan: Dict[str, Any],
+                       saved_payment_method_id: str,
+                       customer_email: Optional[str] = None) -> Dict[str, Any]:
+        """Списание продления с сохранённого способа оплаты (без confirmation).
+
+        Контракт ЮKassa (docs: «Проведение автоплатежа»): создание платежа
+        с `payment_method_id`, `capture: true` и без объекта confirmation —
+        списание безакцептное, периодичность и отключение на нашей стороне.
+        """
+        if not saved_payment_method_id:
+            raise ProviderError("Не указан сохранённый способ оплаты")
+        amount = {"value": f"{int(order['amount_rub'])}.00",
+                  "currency": plan.get("currency") or "RUB"}
+        payload: Dict[str, Any] = {
+            "amount": amount,
+            "capture": True,
+            "payment_method_id": saved_payment_method_id,
+            "description": f"Препресс-Планер: продление — "
+                           f"{plan.get('title') or plan.get('plan')}"[:128],
+            "metadata": {
+                "order_id": order["id"],
+                "org_id": order["org_id"],
+                "user_id": order["user_id"],
+                "plan": order["plan"],
+                "renewal": "1",
+            },
+        }
+        if config.RECEIPT_ENABLED:
+            payload["receipt"] = {
+                "items": [{
+                    "description": (f"Подписка {plan.get('title') or plan.get('plan')} "
+                                    "— Препресс-Планер")[:128],
+                    "quantity": "1",
+                    "amount": {"value": f"{int(order['amount_rub']):.2f}",
+                               "currency": amount["currency"]},
+                    "vat_code": int(config.RECEIPT_VAT_CODE),
+                    "payment_subject": "service",
+                    "payment_mode": "full_payment",
+                }],
+            }
+            email = (customer_email or "").strip()
+            if email:
+                payload["receipt"]["customer"] = {"email": email}
+        data = self._request("POST", "/payments", payload,
+                             idempotence_key=order["id"])
+        payment_id = str(data.get("id") or "")
+        if not payment_id:
+            raise ProviderError("ЮKassa не вернула id автоплатежа")
+        return {
+            "provider_payment_id": payment_id,
+            "provider_order_id": payment_id,
+            "status": data.get("status") or "pending",
+            "confirmation_url": "",
+            "raw": data,
+        }
+
     # -- вебхук -----------------------------------------------------------
     def process_webhook(self, raw_body: bytes,
                         headers: Mapping[str, str]) -> Dict[str, Any]:
@@ -441,6 +509,11 @@ class UnconfiguredProvider(PaymentProvider):
 
     def create_payment(self, order: Dict[str, Any], plan: Dict[str, Any],
                        return_url: str = "",
+                       customer_email: Optional[str] = None) -> Dict[str, Any]:
+        raise ProviderNotConfigured(self._MESSAGE)
+
+    def create_renewal(self, order: Dict[str, Any], plan: Dict[str, Any],
+                       saved_payment_method_id: str,
                        customer_email: Optional[str] = None) -> Dict[str, Any]:
         raise ProviderNotConfigured(self._MESSAGE)
 

@@ -98,6 +98,7 @@ class FakeYooKassa(PaymentProvider):
         self.refunds: List[Dict[str, Any]] = []
         self.refund_status = "succeeded"
         self.fail_create = False
+        self.fail_renew = False
 
     def create_payment(self, order: Dict[str, Any], plan: Dict[str, Any],
                        return_url: str = "",
@@ -114,6 +115,23 @@ class FakeYooKassa(PaymentProvider):
         return {"provider_payment_id": payment_id, "provider_order_id": payment_id,
                 "status": "pending",
                 "confirmation_url": f"https://yookassa.test/confirm/{payment_id}"}
+
+    def create_renewal(self, order: Dict[str, Any], plan: Dict[str, Any],
+                       saved_payment_method_id: str,
+                       customer_email: Optional[str] = None) -> Dict[str, Any]:
+        """Безакцептное списание сохранённым способом (без confirmation)."""
+        if self.fail_renew:
+            from payments_app.provider import ProviderError
+            raise ProviderError("ЮKassa недоступна: тестовый сбой автоплатежа")
+        payment_id = f"pay-{order['id']}"
+        self.created.append({"id": payment_id,
+                             "order_id": order["id"], "plan": plan["plan"],
+                             "amount_rub": order["amount_rub"],
+                             "renewal": True,
+                             "payment_method_id": saved_payment_method_id,
+                             "customer_email": customer_email})
+        return {"provider_payment_id": payment_id, "provider_order_id": payment_id,
+                "status": "pending", "confirmation_url": ""}
 
     def process_webhook(self, raw_body: bytes, headers) -> Dict[str, Any]:
         # ЮKassa подпись не шлёт: если прислана (шлюз/тест) — сверяем.
@@ -566,6 +584,127 @@ def test_cancel_allowed_for_member(fake_provider):
                            headers=auth("t:org-member-cancel:member"))
     assert response.status_code == 200
     assert response.json()["cancel_at_period_end"] is True
+
+
+# --------------------------------------------------------------------------
+# Автопродление (сохранённый способ оплаты, PP_RENEWAL_*)
+# --------------------------------------------------------------------------
+
+def _age_period(org_id: str, hours_left: float, status: str = "active") -> None:
+    """Подвинуть конец периода подписки (для попадания в окно списания)."""
+    end = store_mod.to_iso(time.time() + hours_left * 3600)
+    with STORE.db.tx() as conn:
+        conn.execute("UPDATE subscriptions SET current_period_end = ?, status = ? "
+                     "WHERE org_id = ?", (end, status, org_id))
+
+
+def _renewals_for(fake: FakeYooKassa, org_id: str) -> List[Dict[str, Any]]:
+    """Списания автопродления, созданные для конкретной организации."""
+    out = []
+    for c in fake.created:
+        if not c.get("renewal"):
+            continue
+        order = STORE.get_order(c["order_id"])
+        if order and order["org_id"] == org_id:
+            out.append(c)
+    return out
+
+
+def test_subscription_auto_renew_flag(fake_provider):
+    """auto_renew в API подписки: карта привязана и подписка не отменена."""
+    token = "t:org-autorenew:owner"
+    pay(token)
+    assert subscription(token)["auto_renew"] is True
+    client.post("/payments/subscription/cancel", json={}, headers=auth(token))
+    assert subscription(token)["auto_renew"] is False
+    client.post("/payments/subscription/resume", json={}, headers=auth(token))
+    assert subscription(token)["auto_renew"] is True
+
+
+def test_run_renewals_charges_due_and_webhook_extends(fake_provider):
+    """Списание в окне до конца периода → вебхук продлевает ВСТЫК."""
+    token = "t:org-renew-due:owner"
+    order = pay(token)
+    org = order["org_id"]
+    _age_period(org, 12)  # 12 ч до конца — внутри окна 24 ч
+    before = subscription(token)["current_period_end"]
+
+    res = pm.run_renewals(fake_provider)
+    mine = _renewals_for(fake_provider, org)
+    assert res["created"] >= 1 and mine, res
+    assert mine[0]["payment_method_id"] == "pm-1"  # сохранённый способ оплаты
+
+    # Пока нет вебхука — повторного списания (pending-заказ блокирует).
+    pm.run_renewals(fake_provider)
+    assert len(_renewals_for(fake_provider, org)) == 1
+
+    resp = post_webhook(payment_event(mine[0]["id"], mine[0]["order_id"],
+                                      org, "month", "990.00"))
+    assert resp.status_code == 200, resp.text
+    after = subscription(token)
+    assert after["status"] == "active"
+    delta = (store_mod.from_iso(after["current_period_end"])
+             - store_mod.from_iso(before))
+    assert abs(delta - 30 * 86400) < 5  # новый период от конца старого
+    # Успешное списание обнуляет счётчик ретраев.
+    assert int(STORE.get_subscription_row(org)["renew_attempts"]) == 0
+
+
+def test_run_renewals_skips_cancelled_subscription(fake_provider):
+    """Отменённая (cancel_at_period_end) подписка не продаляется."""
+    token = "t:org-renew-cancel:owner"
+    pay(token)
+    org = "org-renew-cancel"
+    _age_period(org, 6)
+    client.post("/payments/subscription/cancel", json={}, headers=auth(token))
+    pm.run_renewals(fake_provider)
+    assert _renewals_for(fake_provider, org) == []
+    # Права до конца периода сохраняются — это семантика отмены.
+    assert entitlement(token)["pro"] is True
+
+
+def test_run_renewal_failure_retries_then_clears_card(fake_provider,
+                                                       monkeypatch):
+    """Ошибка списания → ретраи; на лимите карта отвязывается (auto_renew off)."""
+    token = "t:org-renew-fail:owner"
+    pay(token)
+    org = "org-renew-fail"
+    _age_period(org, 12)
+    monkeypatch.setattr(pm.config, "RENEWAL_MAX_ATTEMPTS", 2)
+    fake_provider.fail_renew = True
+
+    res = pm.run_renewals(fake_provider)
+    assert res["failed"] >= 1
+    row = STORE.get_subscription_row(org)
+    assert int(row["renew_attempts"]) == 1
+    assert row["saved_payment_method_id"] == "pm-1"  # карта ещё привязана
+    assert subscription(token)["auto_renew"] is True
+
+    # Failed-заказ не блокирует ретрай (блокирует только pending).
+    pm.run_renewals(fake_provider)
+    row = STORE.get_subscription_row(org)
+    assert int(row["renew_attempts"]) == 2
+    assert row["saved_payment_method_id"] is None  # лимит → карта отвязана
+    assert subscription(token)["auto_renew"] is False
+    assert _renewals_for(fake_provider, org) == []  # списаний больше нет
+
+    # Карта отвязана → подписка в выборку автопродления больше не попадает.
+    pm.run_renewals(fake_provider)
+    assert int(STORE.get_subscription_row(org)["renew_attempts"]) == 2
+    assert _renewals_for(fake_provider, org) == []
+
+
+def test_run_renewals_unconfigured_keeps_attempts(fake_provider):
+    """ЮKassa не настроена: попытка не сжигается, карта остаётся."""
+    token = "t:org-renew-unconf:owner"
+    pay(token)
+    org = "org-renew-unconf"
+    _age_period(org, 12)
+    res = pm.run_renewals(UnconfiguredProvider(STORE))
+    assert res["created"] == 0 and res["failed"] == 0
+    row = STORE.get_subscription_row(org)
+    assert int(row["renew_attempts"]) == 0
+    assert row["saved_payment_method_id"] == "pm-1"
 
 
 # --------------------------------------------------------------------------

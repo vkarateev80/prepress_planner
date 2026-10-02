@@ -19,6 +19,10 @@
      `POST /payments/subscription/resume` → снова продлевать;
   5) `POST /payments/subscription/refund` (алиас `POST /payments/refunds`,
      owner/admin) → `POST /refunds` ЮKassa → права понижаются до Free.
+  6) Автопродление: фоновый цикл (`PP_RENEWAL_*`) списывает сохранённый
+     способ оплаты за PP_RENEWAL_LEAD_HOURS до конца периода; продление
+     применяет вебхук `payment.succeeded`. Отмена (`cancel_at_period_end`)
+     останавливает списания, `resume` — возвращает их.
 
 Триал 15 дней (`PP_TRIAL_DAYS`) ведёт этот сервис (auth/entitlement-слой), а не
 провайдер: подписка создаётся `trialing` при первом обращении организации, и до
@@ -40,7 +44,9 @@ PP_TRIAL_DAYS, PP_PRO_MONTH_PRICE_RUB, PP_PRO_YEAR_PRICE_RUB, PP_PUBLIC_BASE).
 """
 from __future__ import annotations
 
+import asyncio
 import json
+from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -175,9 +181,110 @@ class RefundIn(BaseModel):
     reason: Optional[str] = Field(default=None, max_length=256)
 
 
+# ---------- автопродление подписки ----------
+
+def run_renewals(provider: Optional[PaymentProvider] = None) -> Dict[str, Any]:
+    """Один цикл автопродления: списание сохранённого способа оплаты.
+
+    Для каждой подходящей подписки (см. `BillingStore.due_renewals`):
+    создаётся pending-заказ и безакцептный платёж (`payment_method_id`);
+    продление применит существующий вебхук `payment.succeeded`. При ошибке
+    списания — ретрай на следующем цикле, на лимите карта отвязывается
+    (`record_renewal_failure`). Отменённые (`cancel_at_period_end`)
+    подписки в выборку не попадают.
+
+    Возвращает сводку {checked, created, failed, skipped} — её же пишем
+    в лог и используем в тестах.
+    """
+    db_ready()
+    prov = provider if provider is not None else get_provider()
+    now = now_epoch()
+    results: Dict[str, Any] = {"checked": 0, "created": 0,
+                               "failed": 0, "skipped": 0}
+    due = STORE.due_renewals(now, config.RENEWAL_LEAD_HOURS * 3600,
+                              config.RENEWAL_MAX_ATTEMPTS)
+    results["checked"] = len(due)
+    for sub in due:
+        org = str(sub["org_id"])
+        # Свежий pending-заказ: не плодим параллельные списания
+        # (вебхук ещё мог не прийти), старые 7 дней считаем мёртвыми.
+        if STORE.has_recent_pending_order(org, 7 * 86400):
+            results["skipped"] += 1
+            continue
+        user_id = STORE.last_order_user(org)
+        if not user_id:
+            results["skipped"] += 1
+            log_event("renewal_skipped", org_id=org, reason="no_order_history")
+            continue
+        plan = str(sub["plan"] or "")
+        info = config.plan_info(plan)
+        if info is None:
+            results["skipped"] += 1
+            log_event("renewal_skipped", org_id=org, reason="unknown_plan",
+                      plan=plan)
+            continue
+        order = STORE.create_order(org, user_id, info["plan"])
+        try:
+            payment = prov.create_renewal(
+                order, info, str(sub["saved_payment_method_id"] or ""))
+        except ProviderNotConfigured as exc:
+            # Конфигурация среды, а не ошибка плательщика: попытку не
+            # сжигаем и цикл останавливаем (остальные тоже не сконфигурированы).
+            STORE.fail_order(order["id"])
+            log_event("renewal_not_configured", org_id=org, reason=str(exc))
+            break
+        except ProviderError as exc:
+            STORE.fail_order(order["id"])
+            res = STORE.record_renewal_failure(org, config.RENEWAL_MAX_ATTEMPTS)
+            log_event("renewal_charge_failed", org_id=org,
+                      order_id=order["id"], attempts=res.get("attempts"),
+                      cleared=res.get("cleared"), reason=str(exc))
+            results["failed"] += 1
+            continue
+        STORE.set_order_provider(order["id"],
+                                 payment.get("provider_payment_id") or "",
+                                 payment.get("confirmation_url") or "")
+        log_event("renewal_payment_created", org_id=org, order_id=order["id"],
+                  provider_payment_id=payment.get("provider_payment_id"),
+                  plan=plan, amount_rub=order.get("amount_rub"),
+                  status=payment.get("status"))
+        results["created"] += 1
+    if results["checked"]:
+        log_event("renewal_cycle_done", **results)
+    return results
+
+
+async def _renewal_loop() -> None:
+    """Фоновый цикл: первый прогон через интервал (не мешает старту)."""
+    interval_s = config.RENEWAL_INTERVAL_MIN * 60
+    while True:
+        await asyncio.sleep(interval_s)
+        try:
+            await asyncio.to_thread(run_renewals)
+        except asyncio.CancelledError:  # noqa: PLW0120 — корректный выход
+            raise
+        except Exception as exc:  # noqa: BLE001 — цикл не должен умирать
+            log_event("renewal_cycle_failed", reason=str(exc))
+
+
+@asynccontextmanager
+async def _lifespan(_: FastAPI):
+    task: Optional[asyncio.Task] = None
+    if config.RENEWAL_ENABLED:
+        task = asyncio.create_task(_renewal_loop())
+    yield
+    if task is not None:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
 # ---------- app ----------
 
-app = FastAPI(title="Препресс-Планер: billing (ЮKassa)", version="1.0.0")
+app = FastAPI(title="Препресс-Планер: billing (ЮKassa)", version="1.0.0",
+              lifespan=_lifespan)
 
 try:
     ensure_schema()
@@ -493,6 +600,10 @@ def healthz() -> Dict[str, Any]:
         "plans": list(config.PLANS),
         "trial_days": config.TRIAL_DAYS,
         "prices_rub": {"month": config.MONTH_PRICE_RUB, "year": config.YEAR_PRICE_RUB},
+        "renewal": {"enabled": config.RENEWAL_ENABLED,
+                    "interval_min": config.RENEWAL_INTERVAL_MIN,
+                    "lead_hours": config.RENEWAL_LEAD_HOURS,
+                    "max_attempts": config.RENEWAL_MAX_ATTEMPTS},
     }
     payload.update(PROVIDER.describe())
     return payload

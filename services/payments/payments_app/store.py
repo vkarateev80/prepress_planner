@@ -249,6 +249,8 @@ class BillingStore:
             "current_period_end": row["current_period_end"],
             "current_period_ends_at": row["current_period_end"],
             "cancel_at_period_end": as_bool(row["cancel_at_period_end"]),
+            "auto_renew": (bool(row.get("saved_payment_method_id")) and
+                           not as_bool(row["cancel_at_period_end"])),
             "features": rights["features"],
             "updated_at": row["updated_at"],
         }
@@ -276,6 +278,76 @@ class BillingStore:
             assert row is not None
             self._recompute_entitlement(conn, org_id, row)
         return self._subscription_view(row)
+
+    # ------------------------------------------------------------------
+    # Автопродление: кому и когда списывать сохранённый способ оплаты
+    # ------------------------------------------------------------------
+    def due_renewals(self, when: float, lead_s: float,
+                     max_attempts: int) -> List[Dict[str, Any]]:
+        """Подписки, для которых пора списать продление.
+
+        Условия: есть сохранённый способ оплаты, подписка не отменена
+        (`cancel_at_period_end`), период подходит к концу (в пределах
+        `lead_s` до `current_period_end` — включая уже истёкшие) и
+        попытки не исчерпаны.
+        """
+        threshold = to_iso(when + lead_s)
+        with self.db.read() as conn:
+            return conn.query(
+                "SELECT * FROM subscriptions "
+                "WHERE saved_payment_method_id IS NOT NULL "
+                "AND cancel_at_period_end = ? "
+                "AND status IN ('active', 'expired') "
+                "AND current_period_end IS NOT NULL "
+                "AND current_period_end <= ? "
+                "AND renew_attempts < ? "
+                "ORDER BY current_period_end ASC",
+                (False, threshold, int(max_attempts)))
+
+    def record_renewal_failure(self, org_id: str,
+                               max_attempts: int) -> Dict[str, Any]:
+        """Одна неудачная попытка автоплатежа; на лимите карта отвязывается."""
+        now = now_epoch()
+        with self.db.tx() as conn:
+            row = conn.query_one(
+                "SELECT * FROM subscriptions WHERE org_id = ?", (org_id,))
+            if row is None:
+                return {"attempts": 0, "cleared": False}
+            attempts = int(row["renew_attempts"] or 0) + 1
+            cleared = attempts >= int(max_attempts)
+            conn.execute(
+                "UPDATE subscriptions SET renew_attempts = ?, "
+                "renew_last_attempt_at = ?, saved_payment_method_id = ?, "
+                "updated_at = ? WHERE org_id = ?",
+                (attempts, to_iso(now),
+                 None if cleared else row["saved_payment_method_id"],
+                 to_iso(now), org_id))
+            if cleared:
+                # Карта отвязана: без неё подписка истекает по времени,
+                # права падают до Free (_expire_if_needed + entitlement).
+                self._recompute_entitlement(conn, org_id)
+            updated = conn.query_one(
+                "SELECT * FROM subscriptions WHERE org_id = ?", (org_id,))
+        return {"attempts": attempts, "cleared": cleared,
+                "row": updated}
+
+    def has_recent_pending_order(self, org_id: str,
+                                 younger_than_s: float) -> bool:
+        """Есть свежий pending-заказ (не начинать параллельное списание)."""
+        since = to_iso(now_epoch() - younger_than_s)
+        with self.db.read() as conn:
+            row = conn.query_one(
+                "SELECT id FROM orders WHERE org_id = ? AND status = 'pending' "
+                "AND created_at >= ? LIMIT 1", (org_id, since))
+        return row is not None
+
+    def last_order_user(self, org_id: str) -> Optional[str]:
+        """user_id последнего заказа организации (orders.user_id NOT NULL)."""
+        with self.db.read() as conn:
+            row = conn.query_one(
+                "SELECT user_id FROM orders WHERE org_id = ? "
+                "ORDER BY created_at DESC LIMIT 1", (org_id,))
+        return str(row["user_id"]) if row else None
 
     # ------------------------------------------------------------------
     # Заказы
@@ -444,9 +516,13 @@ class BillingStore:
         return order
 
     def _extend_period(self, conn, org_id: str, plan: str,
-                       provider_subscription_id: Optional[str] = None
+                       payment_method_id: Optional[str] = None
                        ) -> Dict[str, Any]:
-        """Продление подписки от конца текущего периода (System Design ADR-3)."""
+        """Продление подписки от конца текущего периода (System Design ADR-3).
+
+        Успешное списание (в т.ч. автоплатёж) сохраняет способ оплаты и
+        обнуляет счётчик ретраев автопродления.
+        """
         info = config.plan_info(plan)
         if info is None:
             raise StoreError(f"Неизвестный тариф заказа: {plan}")
@@ -459,10 +535,11 @@ class BillingStore:
         conn.execute(
             "UPDATE subscriptions SET plan = ?, status = 'active', "
             "current_period_start = ?, current_period_end = ?, "
-            "cancel_at_period_end = ?, provider_subscription_id = COALESCE(?, "
-            "provider_subscription_id), updated_at = ? WHERE org_id = ?",
+            "cancel_at_period_end = ?, saved_payment_method_id = COALESCE(?, "
+            "saved_payment_method_id), renew_attempts = 0, "
+            "renew_last_attempt_at = NULL, updated_at = ? WHERE org_id = ?",
             (info["plan"], to_iso(base), to_iso(end), False,
-             provider_subscription_id, to_iso(now), org_id))
+             payment_method_id, to_iso(now), org_id))
         updated = conn.query_one("SELECT * FROM subscriptions WHERE org_id = ?",
                                  (org_id,))
         assert updated is not None

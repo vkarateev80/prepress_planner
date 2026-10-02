@@ -27,6 +27,10 @@ env:
   PP_PRO_MONTH_PRICE_RUB   — цена Pro-месяца (5000)
   PP_PRO_YEAR_PRICE_RUB    — цена Pro-года (50000)
   PP_WEBHOOK_MAX_BYTES     — лимит тела вебхука (65536)
+  PP_RENEWAL_ENABLED       — 0 = выключить фоновое автопродление (по умолчанию 1)
+  PP_RENEWAL_INTERVAL_MIN  — период цикла автопродления, мин (60)
+  PP_RENEWAL_LEAD_HOURS    — за сколько часов до конца периода списывать (24)
+  PP_RENEWAL_MAX_ATTEMPTS  — максимум неудачных списаний до отвязки карты (5)
 """
 from __future__ import annotations
 
@@ -91,6 +95,19 @@ MONTH_PRICE_RUB = _env_int("PP_PRO_MONTH_PRICE_RUB", 5000)
 YEAR_PRICE_RUB = _env_int("PP_PRO_YEAR_PRICE_RUB", 50000)
 
 WEBHOOK_MAX_BYTES = _env_int("PP_WEBHOOK_MAX_BYTES", 65536)
+
+# Автопродление подписки (фоновый цикл billing):
+#   * списываем сохранённый способ оплаты, когда до конца периода
+#     осталось не больше PP_RENEWAL_LEAD_HOURS (по умолчанию 24 ч) —
+#     продление вебхуком ложится встык к текущему периоду без разрыва;
+#   * при ошибке списания — ретраи на каждом цикле, максимум
+#     PP_RENEWAL_MAX_ATTEMPTS; после лимита карта отвязывается и подписка
+#     истекает (права падают до Free);
+#   * отменённая (cancel_at_period_end) подписка не продлевается.
+RENEWAL_ENABLED = _env("PP_RENEWAL_ENABLED", "1").lower() in ("1", "true", "yes")
+RENEWAL_INTERVAL_MIN = max(1, _env_int("PP_RENEWAL_INTERVAL_MIN", 60))
+RENEWAL_LEAD_HOURS = max(0, _env_int("PP_RENEWAL_LEAD_HOURS", 24))
+RENEWAL_MAX_ATTEMPTS = max(1, _env_int("PP_RENEWAL_MAX_ATTEMPTS", 5))
 
 # Карта гейтинга (F-22, System Design §12.3).
 FREE_FEATURES: Dict[str, Any] = {"projects": 1, "teo": False, "reports": False}

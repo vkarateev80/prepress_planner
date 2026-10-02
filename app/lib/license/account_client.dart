@@ -62,7 +62,11 @@ class ServerSubscription {
   final String? plan;
   final bool pro;
   final DateTime? until;
-  const ServerSubscription({this.plan, this.pro = false, this.until});
+  final String? status;
+  final bool cancelAtPeriodEnd;
+  final bool autoRenew;
+  const ServerSubscription({this.plan, this.pro = false, this.until,
+    this.status, this.cancelAtPeriodEnd = false, this.autoRenew = false});
 
   factory ServerSubscription.fromJson(Map<String, dynamic> j) {
     final until = j['until'];
@@ -70,6 +74,9 @@ class ServerSubscription {
       plan: j['plan'] as String?,
       pro: j['pro'] == true,
       until: until == null ? null : DateTime.tryParse(until.toString()),
+      status: j['status'] as String?,
+      cancelAtPeriodEnd: j['cancel_at_period_end'] == true,
+      autoRenew: j['auto_renew'] == true,
     );
   }
 }
@@ -163,6 +170,13 @@ abstract class AccountGateway {
   /// Текущая подписка пользователя по токену.
   Future<ServerSubscription> subscription(String token);
 
+  /// Отменить автопродление: доступ сохраняется до конца периода,
+  /// новых списаний не будет (`POST /payments/subscription/cancel`).
+  Future<void> cancelSubscription(String token);
+
+  /// Возобновить автопродление (`POST /payments/subscription/resume`).
+  Future<void> resumeSubscription(String token);
+
   /// Тарифы: [{plan, title, amount_rub}].
   Future<List<Map<String, dynamic>>> plans(String token);
 
@@ -231,6 +245,14 @@ class AccountGatewayHttp implements AccountGateway {
     final j = await payments.subscription(token);
     return ServerSubscription.fromJson(j);
   }
+
+  @override
+  Future<void> cancelSubscription(String token) =>
+      payments.cancelSubscription(token);
+
+  @override
+  Future<void> resumeSubscription(String token) =>
+      payments.resumeSubscription(token);
 
   @override
   Future<List<Map<String, dynamic>>> plans(String token) =>
@@ -526,6 +548,16 @@ class PaymentsApi {
   Future<Map<String, dynamic>> subscription(String token) async {
     final j = await _get('/payments/subscription', token);
     return (j as Map).cast<String, dynamic>();
+  }
+
+  /// Отмена автопродления: доступ до конца периода, списаний больше нет.
+  Future<void> cancelSubscription(String token) async {
+    await _post('/payments/subscription/cancel', token, {});
+  }
+
+  /// Возобновление автопродления (списания вернутся).
+  Future<void> resumeSubscription(String token) async {
+    await _post('/payments/subscription/resume', token, {});
   }
 
   Future<Map<String, dynamic>> checkout(String token, String plan) async {

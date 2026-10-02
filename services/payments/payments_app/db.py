@@ -97,6 +97,9 @@ SCHEMA: List[str] = [
         current_period_ends_at   TEXT GENERATED ALWAYS AS (current_period_end) STORED,
         cancel_at_period_end     BOOLEAN NOT NULL DEFAULT FALSE,
         provider_subscription_id TEXT,
+        saved_payment_method_id  TEXT,
+        renew_attempts           INTEGER NOT NULL DEFAULT 0,
+        renew_last_attempt_at    TEXT,
         created_at               TEXT NOT NULL,
         updated_at               TEXT NOT NULL
     )
@@ -320,6 +323,33 @@ class Database:
             renamed.append(table)
         return renamed
 
+    # Колонки, появившиеся после создания схемы (идемпотентная миграция).
+    # `saved_payment_method_id` — сохранённый способ оплаты для автоплатежей;
+    # ранее его писали в provider_subscription_id, значения переносятся.
+    ENSURE_COLUMNS: List[tuple] = [
+        ("subscriptions", "saved_payment_method_id", "TEXT", None),
+        ("subscriptions", "renew_attempts", "INTEGER", "0"),
+        ("subscriptions", "renew_last_attempt_at", "TEXT", None),
+    ]
+
+    def _ensure_columns(self, conn: Connection) -> List[str]:
+        added: List[str] = []
+        for table, column, decl, default in self.ENSURE_COLUMNS:
+            if column in self._columns(conn, table):
+                continue
+            tail = f" DEFAULT {default}" if default is not None else ""
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}{tail}")
+            added.append(f"{table}.{column}")
+        if "saved_payment_method_id" in added:
+            # Перенос: раньше id сохранённого способа лежал в
+            # provider_subscription_id (писал _extend_period).
+            conn.execute(
+                "UPDATE subscriptions SET saved_payment_method_id = "
+                "provider_subscription_id "
+                "WHERE saved_payment_method_id IS NULL "
+                "AND provider_subscription_id IS NOT NULL")
+        return added
+
     def init_schema(self) -> Dict[str, Any]:
         """Создать/актуализировать схему. Возвращает сведения для /healthz."""
         with self._lock:
@@ -328,6 +358,7 @@ class Database:
                 with conn:
                     renamed = self._migrate_legacy(conn)
                     conn.execute_script(SCHEMA)
+                    self._ensure_columns(conn)
                 return {"db": self.describe(), "renamed_legacy": renamed}
             finally:
                 conn.close()

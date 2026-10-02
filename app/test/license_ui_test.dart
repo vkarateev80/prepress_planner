@@ -266,6 +266,41 @@ void main() {
     dir.deleteSync(recursive: true);
   });
 
+  testWidgets('профиль: отмена и возврат автопродления подписки',
+      (tester) async {
+    final dir = Directory.systemTemp.createTempSync('pp_sub_ui');
+    final fake = acc.FakeGateway();
+    final lic = LicenseController(
+      store: EntitlementStore('${dir.path}/st'),
+      client: LicenseClient(),
+      gateway: fake,
+      stateDir: '${dir.path}/st',
+    );
+    await tester.runAsync(() async {
+      await lic.init();
+      await lic.register('Владелец', 'sub@example.com', 'secret1');
+      await lic.confirm(acc.FakeGateway.devEmailCode);
+      await lic.purchase('month');
+    });
+    expect(lic.entitlement.pro, isTrue);
+
+    await tester.pumpWidget(MaterialApp(home: AccountScreen(license: lic)));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('Отменить автопродление'), findsOneWidget);
+
+    await tester.tap(find.text('Отменить автопродление'));
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.textContaining('Продление отменено'), findsOneWidget);
+    expect(find.text('Включить автопродление'), findsOneWidget);
+    expect(fake.canceled, isTrue);
+
+    await tester.tap(find.text('Включить автопродление'));
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.text('Отменить автопродление'), findsOneWidget);
+    expect(fake.canceled, isFalse);
+    dir.deleteSync(recursive: true);
+  });
+
   testWidgets('переключение вкладки: 401 → разлогин без перезагрузки',
       (tester) async {
     final dir = Directory.systemTemp.createTempSync('pp_tab401');

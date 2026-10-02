@@ -236,6 +236,49 @@ def test_save_payment_method_env_sets_payload_flag(api, store, monkeypatch):
     assert _StubHandler.requests[0]["body"]["save_payment_method"] is True
 
 
+def test_create_renewal_payload_with_payment_method_id(api, store):
+    """Автоплатёж: payment_method_id + capture, БЕЗ confirmation (безакцепт)."""
+    _StubHandler.responses = [(200, {
+        "id": "2f8f0e1e-0002-0000-0000-000000000002",
+        "status": "succeeded",
+        "payment_method": {"id": "pm-saved-1", "saved": True},
+    })]
+    provider = YooKassaProvider(store, shop_id=SHOP_ID, secret_key=SECRET_KEY,
+                                webhook_secret="whsec", api_url=api)
+    result = provider.create_renewal(ORDER, PLAN, "pm-saved-1")
+
+    assert result["provider_payment_id"] == "2f8f0e1e-0002-0000-0000-000000000002"
+    assert result["confirmation_url"] == ""
+    assert result["provider_order_id"] == result["provider_payment_id"]
+
+    sent = _StubHandler.requests[0]
+    assert sent["path"].endswith("/payments")
+    assert sent["idempotence_key"] == "order-1"
+    body = sent["body"]
+    assert body["amount"] == {"value": "990.00", "currency": "RUB"}
+    assert body["payment_method_id"] == "pm-saved-1"
+    assert body["capture"] is True
+    assert "confirmation" not in body          # без подтверждения пользователя
+    assert "save_payment_method" not in body   # карта уже сохранена
+    assert body["metadata"] == {"order_id": "order-1", "org_id": "org-1",
+                                "user_id": "user-1", "plan": "month",
+                                "renewal": "1"}
+    assert "receipt" in body                   # чек включён по умолчанию
+
+
+def test_create_renewal_requires_saved_method(store, api):
+    provider = YooKassaProvider(store, shop_id=SHOP_ID, secret_key=SECRET_KEY,
+                                webhook_secret="whsec", api_url=api)
+    with pytest.raises(ProviderError, match="сохранённый способ"):
+        provider.create_renewal(ORDER, PLAN, "")
+
+
+def test_unconfigured_provider_renewal_raises(store):
+    provider = UnconfiguredProvider(store)
+    with pytest.raises(ProviderNotConfigured):
+        provider.create_renewal(ORDER, PLAN, "pm-saved-1")
+
+
 def test_unconfigured_provider_accepts_customer_email_kwarg(store):
     """Сигнатура совместима: email не ломает заглушку без ключей."""
     provider = UnconfiguredProvider(store)

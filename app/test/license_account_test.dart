@@ -17,6 +17,8 @@ class FakeGateway implements AccountGateway {
   final Set<String> _unverified = {}; // ждут подтверждения
   bool serverDown = false;
   bool expiredSessions = false; // сервер вернул 401 (сессию вытеснили)
+  bool autoRenew = true;  // сохранённый способ оплаты привязан
+  bool canceled = false;  // cancel_at_period_end
   String? pendingPaymentUrl; // checkout вернул страницу оплаты, pro ещё нет
   DateTime? _until;
   String? _plan;
@@ -178,7 +180,25 @@ class FakeGateway implements AccountGateway {
     if (expiredSessions) {
       throw const ApiException('Сессия недействительна', statusCode: 401);
     }
-    return ServerSubscription(plan: _plan, pro: _until != null, until: _until);
+    return ServerSubscription(
+        plan: _plan,
+        pro: _until != null,
+        until: _until,
+        status: _until != null ? 'active' : 'trialing',
+        cancelAtPeriodEnd: canceled,
+        autoRenew: autoRenew && !canceled);
+  }
+
+  @override
+  Future<void> cancelSubscription(String token) async {
+    if (serverDown) throw const ApiException('Сервер недоступен');
+    canceled = true;
+  }
+
+  @override
+  Future<void> resumeSubscription(String token) async {
+    if (serverDown) throw const ApiException('Сервер недоступен');
+    canceled = false;
   }
 
   @override
@@ -325,6 +345,33 @@ void main() {
     expect(err1, isNotNull);
     final err2 = await lic.login('reset@example.com', 'new-pass1');
     expect(err2, isNull);
+  });
+
+  test('подписка: отмена автопродления блокирует списания, resume возвращает',
+      () async {
+    final lic = make();
+    await lic.init();
+    await lic.register('Тест Юзер', 'sub@example.com', 'secret1');
+    await lic.confirm(FakeGateway.devEmailCode);
+    await lic.purchase('month');
+
+    var state = await lic.subscriptionState();
+    expect(state.error, isNull);
+    expect(state.sub!.pro, isTrue);
+    expect(state.sub!.autoRenew, isTrue);
+    expect(state.sub!.cancelAtPeriodEnd, isFalse);
+
+    final cerr = await lic.cancelSubscription();
+    expect(cerr, isNull);
+    state = await lic.subscriptionState();
+    expect(state.sub!.cancelAtPeriodEnd, isTrue);
+    expect(state.sub!.autoRenew, isFalse); // списаний больше не будет
+
+    final rerr = await lic.resumeSubscription();
+    expect(rerr, isNull);
+    state = await lic.subscriptionState();
+    expect(state.sub!.cancelAtPeriodEnd, isFalse);
+    expect(state.sub!.autoRenew, isTrue);
   });
 
   test('reset с неверным кодом → ошибка', () async {

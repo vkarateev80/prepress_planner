@@ -236,7 +236,9 @@ class _AccountScreenState extends State<AccountScreen> {
           Text('Pro до ${_fmt(lic.entitlement.until!)}',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodySmall),
-        const SizedBox(height: 20),
+        const SizedBox(height: 8),
+        _SubscriptionActions(license: license),
+        const SizedBox(height: 12),
         // Устройства: лимит 1/1.
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -430,6 +432,112 @@ class _AccountScreenState extends State<AccountScreen> {
   static String _fmt(DateTime d) =>
       '${d.day.toString().padLeft(2, '0')}.'
       '${d.month.toString().padLeft(2, '0')}.${d.year}';
+}
+
+/// Управление автопродлением подписки: состояние, отмена, возобновление.
+/// Показывается, только когда есть что показать (карта привязана либо
+/// продление отменено).
+class _SubscriptionActions extends StatefulWidget {
+  final LicenseController license;
+  const _SubscriptionActions({required this.license});
+
+  @override
+  State<_SubscriptionActions> createState() => _SubscriptionActionsState();
+}
+
+class _SubscriptionActionsState extends State<_SubscriptionActions> {
+  ServerSubscription? _sub;
+  String? _error;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  LicenseController get license => widget.license;
+
+  Future<void> _load() async {
+    final res = await license.subscriptionState();
+    if (!mounted) return;
+    setState(() {
+      _sub = res.sub;
+      _error = res.error;
+      _loading = false;
+    });
+  }
+
+  Future<void> _run(Future<String?> Function() action) async {
+    final err = await action();
+    if (!mounted) return;
+    if (err != null) {
+      setState(() => _error = err);
+      return;
+    }
+    setState(() {
+      _error = null;
+      _loading = true;
+    });
+    await _load();
+  }
+
+  String _fmt(DateTime d) =>
+      '${d.day.toString().padLeft(2, '0')}.'
+      '${d.month.toString().padLeft(2, '0')}.${d.year}';
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Padding(
+        padding: EdgeInsets.all(4),
+        child: Center(
+            child: SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2))),
+      );
+    }
+    final sub = _sub;
+    final children = <Widget>[];
+    if (sub != null &&
+        (sub.autoRenew || sub.cancelAtPeriodEnd)) {
+      final until = sub.until != null ? _fmt(sub.until!) : '';
+      children.add(Text(
+          sub.plan == 'year' ? 'Подписка: Pro на год' : 'Подписка: Pro на месяц',
+          textAlign: TextAlign.center,
+          style: Theme.of(context).textTheme.bodyMedium));
+      if (sub.cancelAtPeriodEnd) {
+        children.add(Text(
+            'Продление отменено — доступ сохранится до $until, '
+            'новых списаний не будет.',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.blueGrey, fontSize: 12)));
+        children.add(TextButton(
+          onPressed:
+              license.busy ? null : () => _run(license.resumeSubscription),
+          child: const Text('Включить автопродление'),
+        ));
+      } else {
+        children.add(const Text(
+            'Автопродление включено: карта спишется за сутки до конца периода.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.blueGrey, fontSize: 12)));
+        children.add(TextButton(
+          onPressed:
+              license.busy ? null : () => _run(license.cancelSubscription),
+          child: const Text('Отменить автопродление'),
+        ));
+      }
+    }
+    if (_error != null) {
+      children.add(Text(_error!,
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: Colors.redAccent, fontSize: 12)));
+    }
+    if (children.isEmpty) return const SizedBox.shrink();
+    return Column(children: children);
+  }
 }
 
 /// Список устройств аккаунта (лимит 1/1): текущее и «войти на другом —

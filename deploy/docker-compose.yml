@@ -236,6 +236,11 @@ services:
       YUKASSA_API_URL: ${YUKASSA_API_URL:-https://api.yookassa.ru/v3}
       # 1 — просить ЮKassa сохранить способ оплаты (автоплатежи; нужна активация).
       YUKASSA_SAVE_PAYMENT_METHOD: ${YUKASSA_SAVE_PAYMENT_METHOD:-0}
+      # Автопродление: фоновый цикл списывает сохранённую карту до конца периода.
+      PP_RENEWAL_ENABLED: ${PP_RENEWAL_ENABLED:-1}
+      PP_RENEWAL_INTERVAL_MIN: ${PP_RENEWAL_INTERVAL_MIN:-60}
+      PP_RENEWAL_LEAD_HOURS: ${PP_RENEWAL_LEAD_HOURS:-24}
+      PP_RENEWAL_MAX_ATTEMPTS: ${PP_RENEWAL_MAX_ATTEMPTS:-5}
       PP_TRIAL_DAYS: "15"
       PP_PRO_MONTH_PRICE_RUB: "990"
       PP_PRO_YEAR_PRICE_RUB: "9900"
