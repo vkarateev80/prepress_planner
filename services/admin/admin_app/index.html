@@ -91,6 +91,7 @@
     <button data-t="access">Доступы</button>
     <button data-t="subs">Подписки</button>
     <button data-t="orders">Заказы</button>
+    <button data-t="projects">Проекты</button>
     <button data-t="db">База данных</button>
   </nav>
   <main>
@@ -166,6 +167,32 @@
         <table><thead><tr><th>Заказ</th><th>Организация</th><th>Тариф</th>
           <th>Сумма</th><th>Статус</th><th>Создан</th></tr></thead>
           <tbody id="ordersBody"></tbody></table>
+      </div>
+    </section>
+
+    <section id="t-projects" class="hide">
+      <div class="card">
+        <h2>Проекты</h2>
+        <div class="row" style="margin-bottom:10px">
+          <input id="projQuery" placeholder="Поиск по названию"
+                 style="min-width:220px">
+          <select id="projOrg" style="min-width:190px">
+            <option value="">Все организации</option>
+          </select>
+          <label class="muted" style="display:flex;align-items:center;gap:6px">
+            <input type="checkbox" id="projDeleted">показать удалённые</label>
+          <button class="act" id="projSearch">Найти</button>
+          <span class="muted" id="projMeta"></span>
+        </div>
+        <div style="overflow:auto">
+          <table><thead><tr>
+            <th>Название</th><th>Организация</th><th>Владелец</th>
+            <th>Создан</th><th>Обновлён</th><th>Файлов</th><th>id</th>
+          </tr></thead><tbody id="projBody"></tbody></table>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button class="ghost" id="projMore">Показать ещё</button>
+        </div>
       </div>
     </section>
 
@@ -277,6 +304,7 @@ document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click
   if (t === 'access') loadAccess();
   if (t === 'subs') loadSubs();
   if (t === 'orders') loadOrders();
+  if (t === 'projects') loadProjects(false);
   if (t === 'db') loadTables();
 }));
 
@@ -436,6 +464,66 @@ async function loadOrders() {
   } catch (e) { msg(e.message, 'err'); }
 }
 $('ordersLoad').addEventListener('click', loadOrders);
+
+// ---- проекты ----
+const PROJ_LIMIT = 50;
+let projOffset = 0;
+
+function projQuery(offset) {
+  const p = new URLSearchParams({limit: String(PROJ_LIMIT),
+                                 offset: String(offset)});
+  const q = $('projQuery').value.trim();
+  if (q) p.set('q', q);
+  const org = $('projOrg').value;
+  if (org) p.set('org_id', org);
+  if ($('projDeleted').checked) p.set('include_deleted', 'true');
+  return p.toString();
+}
+
+function projFillOrgs(orgs, keep) {
+  const sel = $('projOrg');
+  const cur = keep ? sel.value : '';
+  sel.innerHTML = '<option value="">Все организации</option>' +
+    orgs.map(o => `<option value="${esc(o.org_id)}">${esc(o.name)}</option>`).join('');
+  sel.value = cur;
+  if (sel.value !== cur) sel.value = '';  // организация исчезла из фильтра
+}
+
+function projRow(p) {
+  const fmt = v => esc(String(v || '').slice(0, 19).replace('T', ' '));
+  const pill = p.deleted_at
+    ? ' <span class="pill bad">удалён</span>' : '';
+  return `<tr>
+    <td>${esc(p.name)}${pill}</td>
+    <td>${esc(p.org_name)}</td>
+    <td>${esc(p.owner_email || '—')}</td>
+    <td>${fmt(p.created_at)}</td>
+    <td>${fmt(p.updated_at)}</td>
+    <td>${p.files_count}</td>
+    <td class="mono" title="${esc(p.id)}">${shortId(p.id)}</td>
+  </tr>`;
+}
+
+async function loadProjects(append) {
+  const offset = append ? projOffset : 0;
+  try {
+    const data = await api('/admin/api/projects?' + projQuery(offset));
+    projFillOrgs(data.orgs || [], append);
+    const html = data.items.map(projRow).join('') ||
+      '<tr><td colspan="7" class="muted">Проектов нет</td></tr>';
+    $('projBody').innerHTML = append ? $('projBody').innerHTML + html : html;
+    projOffset = offset + data.items.length;
+    $('projMeta').textContent = `показано ${projOffset} из ${data.total}`;
+    $('projMore').disabled = data.items.length < data.limit;
+  } catch (e) { msg(e.message, 'err'); }
+}
+
+$('projSearch').addEventListener('click', () => loadProjects(false));
+$('projQuery').addEventListener('keydown',
+    e => { if (e.key === 'Enter') loadProjects(false); });
+$('projOrg').addEventListener('change', () => loadProjects(false));
+$('projDeleted').addEventListener('change', () => loadProjects(false));
+$('projMore').addEventListener('click', () => loadProjects(true));
 
 // ---- база ----
 async function loadTables() {

@@ -10,6 +10,8 @@
   * подписки: выдача/отзыв Pro прямой правкой subscriptions+entitlements
     (возврат реальных средств — через кабинет ЮKassa);
   * заказы: список статусов;
+  * проекты: список с поиском по названию, фильтром по организации,
+    счётчиком файлов и пагинацией (имена орг/владельцев — из auth.db);
   * БД: read-only просмотр whitelisted-таблиц PostgreSQL.
 
 Доступ: вход через auth (`POST /auth/login`), но панель видна только
@@ -29,6 +31,9 @@ API (все, кроме login — Bearer):
   GET  /admin/api/subscriptions                          → подписки + Pro
   POST /admin/api/subscriptions      {org_id, action}    → grant|revoke
   GET  /admin/api/orders                                 → заказы
+  GET  /admin/api/projects? q=&org_id=&include_deleted=  → проекты (поиск,
+                                                             фильтр по орг,
+                                                             пагинация)
   GET  /admin/api/db/tables                              → whitelist + counts
   GET  /admin/api/db/{table}?limit=&offset=              → строки (read-only)
   GET  /healthz
@@ -536,6 +541,72 @@ def orders_list(status: str = "",
     for r in rows:
         r["org_name"] = org_names.get(r["org_id"], "—")
     return {"items": rows, "count": len(rows)}
+
+
+@app.get("/admin/api/projects")
+def projects_list(q: str = "",
+                  org_id: str = "",
+                  include_deleted: bool = False,
+                  limit: int = 50,
+                  offset: int = 0,
+                  admin: Dict[str, Any] = Depends(_require_admin)) -> Dict[str, Any]:
+    """Проекты: поиск по названию, фильтр по организации, пагинация.
+
+    Имена организаций и email владельцев берутся из auth.db (read-only),
+    метаданные проектов и счётчик файлов — из PostgreSQL (как в services/api).
+    """
+    d = _db()
+    where = ["1=1"]
+    params: List[Any] = []
+    if not include_deleted:
+        where.append("p.deleted_at IS NULL")
+    org_id = (org_id or "").strip()
+    if org_id:
+        where.append("p.org_id = ?")
+        params.append(org_id)
+    query = (q or "").strip()
+    if query:
+        where.append("LOWER(p.name) LIKE LOWER(?)")
+        params.append(f"%{query}%")
+    cond = " AND ".join(where)
+    limit = max(1, min(int(limit), 200))
+    offset = max(0, int(offset))
+    rows = d.query(
+        "SELECT p.id, p.org_id, p.name, p.created_by, p.created_at,"
+        " p.updated_at, p.deleted_at,"
+        " (SELECT COUNT(*) FROM files f WHERE f.project_id = p.id"
+        "  AND f.deleted_at IS NULL) AS files_count"
+        f" FROM projects p WHERE {cond}"
+        " ORDER BY p.created_at DESC LIMIT ? OFFSET ?",
+        tuple(params + [limit, offset]))
+    counted = d.query(
+        f"SELECT COUNT(*) AS n FROM projects p WHERE {cond}", tuple(params))
+    total = int(counted[0].get("n") or 0) if counted else 0
+
+    orgs = {r["id"]: r["name"]
+            for r in _auth_rows("SELECT id, name FROM organizations")}
+    users = {r["id"]: r["email"] for r in _auth_rows("SELECT id, email FROM users")}
+    org_ids = [r["org_id"] for r in
+               d.query("SELECT DISTINCT org_id FROM projects ORDER BY org_id")]
+    items = [{
+        "id": r["id"],
+        "name": r["name"],
+        "org_id": r["org_id"],
+        "org_name": orgs.get(r["org_id"], "—"),
+        "created_by": r.get("created_by"),
+        "owner_email": users.get(r.get("created_by") or "", ""),
+        "created_at": r.get("created_at"),
+        "updated_at": r.get("updated_at"),
+        "deleted_at": r.get("deleted_at"),
+        "files_count": int(r.get("files_count") or 0),
+    } for r in rows]
+    return {
+        "items": items,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "orgs": [{"org_id": o, "name": orgs.get(o, "—")} for o in org_ids],
+    }
 
 
 # --------------------------------------------------------------------------

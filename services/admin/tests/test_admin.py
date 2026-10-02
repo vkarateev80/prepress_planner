@@ -107,9 +107,13 @@ def _init_panel_db() -> None:
         """
         CREATE TABLE plans (plan TEXT PRIMARY KEY, title TEXT,
             amount_rub INTEGER DEFAULT 0, days INTEGER DEFAULT 0);
-        CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT,
-            org_id TEXT, created_at TEXT);
-        CREATE TABLE files (id TEXT PRIMARY KEY, org_id TEXT, name TEXT);
+        CREATE TABLE projects (
+            id TEXT PRIMARY KEY, org_id TEXT, name TEXT, created_by TEXT,
+            created_at TEXT, updated_at TEXT, deleted_at TEXT,
+            state_json TEXT DEFAULT '{}');
+        CREATE TABLE files (
+            id TEXT PRIMARY KEY, org_id TEXT, project_id TEXT, name TEXT,
+            deleted_at TEXT);
         CREATE TABLE file_versions (id TEXT PRIMARY KEY, file_id TEXT);
         CREATE TABLE reports (id TEXT PRIMARY KEY, project_id TEXT,
             fmt TEXT);
@@ -140,6 +144,27 @@ def _init_panel_db() -> None:
         "INSERT INTO orders (id, org_id, plan, amount_rub, status, "
         "created_at) VALUES ('ord1', ?, 'month', 5000, 'paid', "
         "'2026-09-29T10:00:00Z')", (OTHER_ORG,))
+    # Проекты: живой (с файлами), чужой, удалённый.
+    conn.execute(
+        "INSERT INTO projects (id, org_id, name, created_by, created_at, "
+        "updated_at) VALUES ('prj1', ?, 'Этикетка 50x30', 'u-admin', "
+        "'2026-09-28T10:00:00Z', '2026-09-29T11:00:00Z')", (SYS_ORG,))
+    conn.execute(
+        "INSERT INTO projects (id, org_id, name, created_by, created_at, "
+        "updated_at) VALUES ('prj2', ?, 'Catalog A4', 'u-user', "
+        "'2026-09-27T09:00:00Z', '2026-09-27T09:00:00Z')", (OTHER_ORG,))
+    conn.execute(
+        "INSERT INTO projects (id, org_id, name, created_by, created_at, "
+        "updated_at, deleted_at) VALUES ('prj3', ?, 'Старый макет', "
+        "'u-admin', '2026-09-20T09:00:00Z', '2026-09-21T09:00:00Z', "
+        "'2026-09-22T09:00:00Z')", (SYS_ORG,))
+    for fid, pid, name in (("f1", "prj1", "label.svg"),
+                           ("f2", "prj1", "source.dxf"),
+                           ("f3", "prj1", "deleted.png")):
+        deleted = "'2026-09-29T00:00:00Z'" if fid == "f3" else "NULL"
+        conn.execute(
+            f"INSERT INTO files (id, org_id, project_id, name, deleted_at) "
+            f"VALUES (?, ?, ?, ?, {deleted})", (fid, SYS_ORG, pid, name))
     conn.commit()
     conn.close()
 
@@ -355,6 +380,56 @@ def test_orders_list():
     r = client.get("/admin/api/orders?status=pending",
                    headers=_h("tok-admin"))
     assert r.json()["items"] == []
+
+
+def test_projects_list_filters_and_enrichment():
+    """Список проектов: сортировка, обогащение (орг/владелец/файлы),
+    поиск, фильтр по орг, удалённые, пагинация."""
+    r = client.get("/admin/api/projects", headers=_h("tok-admin"))
+    assert r.status_code == 200
+    data = r.json()
+    # Удалённый по умолчанию скрыт; сортировка — по created_at DESC.
+    assert [p["name"] for p in data["items"]] == [
+        "Этикетка 50x30", "Catalog A4"]
+    assert data["total"] == 2
+    prj1 = next(p for p in data["items"] if p["id"] == "prj1")
+    assert prj1["org_name"] == "Системная"
+    assert prj1["owner_email"] == "admin@example.com"
+    assert prj1["files_count"] == 2   # удалённый файл не считается
+    assert prj1["deleted_at"] is None
+    assert {o["org_id"] for o in data["orgs"]} == {SYS_ORG, OTHER_ORG}
+
+    # Поиск по названию (ASCII-регистронезависимо: LOWER в SQL).
+    r = client.get("/admin/api/projects?q=catalog",
+                   headers=_h("tok-admin"))
+    assert [p["name"] for p in r.json()["items"]] == ["Catalog A4"]
+    r = client.get("/admin/api/projects?q=Этикетка",
+                   headers=_h("tok-admin"))
+    assert [p["name"] for p in r.json()["items"]] == ["Этикетка 50x30"]
+
+    # Фильтр по организации.
+    r = client.get("/admin/api/projects?org_id=" + SYS_ORG,
+                   headers=_h("tok-admin"))
+    assert [p["id"] for p in r.json()["items"]] == ["prj1"]
+    assert r.json()["total"] == 1
+
+    # Удалённые — только по явному запросу.
+    r = client.get("/admin/api/projects?include_deleted=true",
+                   headers=_h("tok-admin"))
+    assert r.json()["total"] == 3
+    deleted = [p for p in r.json()["items"] if p["deleted_at"]]
+    assert [p["id"] for p in deleted] == ["prj3"]
+
+    # Пагинация.
+    r = client.get("/admin/api/projects?limit=1", headers=_h("tok-admin"))
+    body = r.json()
+    assert len(body["items"]) == 1 and body["total"] == 2
+
+
+def test_projects_list_requires_system_admin():
+    r = client.get("/admin/api/projects", headers=_h("tok-stranger"))
+    assert r.status_code == 403
+    assert "owner или admin" in r.json()["detail"]
 
 
 def test_db_tables_and_whitelist():
